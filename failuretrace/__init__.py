@@ -1,0 +1,76 @@
+"""FailureTrace — provider-free, failure-aware experiment governance for autoresearch.
+
+Phase 1 public surface: core enums, Pydantic models, Settings + the canonical
+``improvement()`` helper, ID generators, idempotent database initialization, and the
+repository (the only write path). ``record_rejected_trial()`` (the autoresearch-facing
+public API) lands in Phase 5.
+"""
+
+from __future__ import annotations
+
+from .core.enums import (
+    CausalSupportLevel,
+    FailureCategory,
+    HypothesisSource,
+    LinkType,
+    MetricDirection,
+    TrialStatus,
+)
+from .core.ids import (
+    new_hypothesis_id,
+    new_link_id,
+    new_plan_id,
+    new_promotion_id,
+    new_replication_group_id,
+    new_trial_id,
+)
+from .core.models import (
+    CounterfactualPlanRef,
+    FailureHypothesis,
+    Intervention,
+    LinkRecord,
+    PromotionRecord,
+    TrialRecord,
+)
+from .core.settings import Settings, get_settings, improvement, load_settings
+from .store.errors import DuplicateRecordError, HardConstraintViolation, StoreError
+from .store.migrations import initialize_database
+from .store.repository import Repository
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "__version__",
+    # enums
+    "TrialStatus",
+    "FailureCategory",
+    "CausalSupportLevel",
+    "HypothesisSource",
+    "MetricDirection",
+    "LinkType",
+    # models
+    "TrialRecord",
+    "FailureHypothesis",
+    "Intervention",
+    "CounterfactualPlanRef",
+    "PromotionRecord",
+    "LinkRecord",
+    # settings + helper
+    "Settings",
+    "load_settings",
+    "get_settings",
+    "improvement",
+    # ids
+    "new_trial_id",
+    "new_hypothesis_id",
+    "new_promotion_id",
+    "new_plan_id",
+    "new_link_id",
+    "new_replication_group_id",
+    # store
+    "initialize_database",
+    "Repository",
+    "StoreError",
+    "DuplicateRecordError",
+    "HardConstraintViolation",
+]

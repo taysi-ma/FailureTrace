@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "failuretrace"
+version = "0.1.0"
+description = "Provider-free, failure-aware experiment governance layer for the autoresearch repository"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+# Core runtime deps are intentionally minimal and provider-free. Heavier / phase-specific
+# deps are extras so the foundation installs light and offline (see CLAUDE.md ground rules).
+dependencies = [
+    "pydantic>=2",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+analysis = ["pandas>=2", "matplotlib>=3"]   # reporting + failure maps (Phase 5)
+ollama = ["requests>=2"]                     # local Ollama client only (Phase 3)
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["failuretrace*"]
+
+[tool.setuptools.package-data]
+"failuretrace.config" = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["failuretrace/tests"]
+pythonpath = ["."]
+addopts = "-ra --import-mode=importlib"

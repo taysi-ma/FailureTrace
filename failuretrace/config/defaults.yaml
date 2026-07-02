@@ -1,0 +1,21 @@
+# FailureTrace configuration — Phase 1 keys. Later phases EXTEND (never replace) this file.
+# In-tree paths are development defaults ONLY; override via Settings overrides or the
+# FAILURETRACE_DATA_DIR environment variable. Never hard-code paths at call sites.
+
+# --- Feature flags ---
+enabled: true
+ollama_enabled: false
+collect_telemetry: true
+store_raw_json: true
+counterfactual_planner_enabled: true
+replication_gate_enabled: true
+
+# --- Paths (development defaults; overridable) ---
+paths:
+  data_dir: failuretrace/data          # db + trials/ live under here
+  reports_dir: failuretrace/reports
+
+# --- Metric configuration (direction-aware, central). Never assume larger is better. ---
+metric:
+  name: val_bpb
+  direction: minimize   # or maximize

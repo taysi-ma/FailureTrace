@@ -30,3 +30,6 @@ autoresearch/
 # FailureTrace: runtime data + generated reports (paths overridable via Settings / FAILURETRACE_DATA_DIR)
 failuretrace/data/
 failuretrace/reports/
+
+# Testing
+.pytest_cache/
