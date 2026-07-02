@@ -418,4 +418,4 @@ provider-free guarantee.
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
