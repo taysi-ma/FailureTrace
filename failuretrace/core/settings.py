@@ -80,6 +80,16 @@ class Settings(BaseModel):
         canonical = json.dumps(semantic, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
+    def section(self, name: str) -> dict[str, Any]:
+        """Return a config section (e.g. ``thresholds``, ``confidence``) as a dict.
+
+        Reads from the raw merged config so later-phase sections are available even
+        though they are not modeled as explicit ``Settings`` fields.
+        """
+        source = self._raw or self.model_dump(mode="python")
+        value = source.get(name, {})
+        return dict(value) if isinstance(value, dict) else {}
+
 
 def default_config_path() -> Path:
     """Absolute path to the packaged ``defaults.yaml``."""

@@ -36,6 +36,8 @@ from .core.settings import Settings, get_settings, improvement, load_settings
 from .store.errors import DuplicateRecordError, HardConstraintViolation, StoreError
 from .store.migrations import initialize_database
 from .store.repository import Repository
+from .telemetry import TelemetryRecord, normalize, parse_run_log, telemetry_from_run_log
+from .classifier import ClassificationContext, FailureClassification, classify
 
 __version__ = "0.1.0"
 
@@ -73,4 +75,13 @@ __all__ = [
     "StoreError",
     "DuplicateRecordError",
     "HardConstraintViolation",
+    # telemetry
+    "TelemetryRecord",
+    "normalize",
+    "parse_run_log",
+    "telemetry_from_run_log",
+    # classifier
+    "ClassificationContext",
+    "FailureClassification",
+    "classify",
 ]

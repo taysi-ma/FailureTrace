@@ -39,16 +39,24 @@ def test_ac1_synthetic_rejected_trial_ingested_via_public_api():
     ...
 
 
-# --- AC2 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 2")
+# --- AC2 (active, phase 2) ------------------------------------------------------
 def test_ac2_normalized_telemetry_record_produced():
-    ...
+    from failuretrace.telemetry import TelemetryRecord, normalize
+
+    rec = normalize({"val_metric": 1.0, "peak_vram_gb": 44.0, "unknown_key": 5})
+    assert isinstance(rec, TelemetryRecord)
+    assert rec.val_metric == 1.0 and rec.peak_vram_gb == 44.0
+    assert normalize({}).val_metric is None  # partial input accepted gracefully
 
 
-# --- AC3 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 2")
-def test_ac3_deterministic_classifier_returns_explainable_category():
-    ...
+# --- AC3 (active, phase 2) ------------------------------------------------------
+def test_ac3_deterministic_classifier_returns_explainable_category(settings):
+    from failuretrace.classifier import classify
+    from failuretrace.tests.fixtures.scenarios import divergence_nan
+
+    result = classify(divergence_nan(), settings)
+    assert result.category.value == "divergence"
+    assert result.observations and result.triggered_rules  # explainable
 
 
 # --- AC4 ------------------------------------------------------------------------

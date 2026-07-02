@@ -19,3 +19,20 @@ paths:
 metric:
   name: val_bpb
   direction: minimize   # or maximize
+
+# --- Classifier thresholds (Phase 2). No magic numbers in code; all live here. ---
+thresholds:
+  gpu_memory_ratio_resource_pressure: 0.98
+  gradient_norm_cv_instability: 2.0
+  undertraining_loss_slope: -0.01
+  overfitting_train_val_gap: 0.10
+  inconclusive_noise_floor: 0.001
+  replication_minimum_trials: 2
+  counterfactual_minimum_support: 1
+
+# --- Confidence rubric (Phase 2). tier value x evidence completeness; see classifier docs. ---
+confidence:
+  deterministic: 0.95
+  strong_heuristic: 0.7
+  weak_heuristic: 0.5
+  default: 0.3
