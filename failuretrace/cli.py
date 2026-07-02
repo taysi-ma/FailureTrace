@@ -117,6 +117,15 @@ def _cmd_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_demo(args: argparse.Namespace) -> int:
+    from .demo import render_demo_report, run_demo
+
+    settings = _build_settings(args)
+    result = run_demo(settings)
+    print(render_demo_report(result))
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     from .reporting import write_failure_map, write_summary, write_trial_report
 
@@ -153,6 +162,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="create/upgrade the database (idempotent)").set_defaults(func=_cmd_init)
+
+    sub.add_parser("demo", help="run the end-to-end synthetic demo (Ollama disabled)").set_defaults(func=_cmd_demo)
 
     p_ingest = sub.add_parser("ingest", help="ingest a synthetic/demo trial JSON")
     p_ingest.add_argument("trial_json", help="path to a trial JSON file")

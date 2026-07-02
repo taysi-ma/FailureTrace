@@ -62,6 +62,7 @@ from .integration import (
     record_rejected_trial,
     render_program_md_hook,
 )
+from .demo import DemoResult, run_demo
 
 __version__ = "0.1.0"
 
@@ -133,4 +134,7 @@ __all__ = [
     "record_from_run",
     "render_program_md_hook",
     "guidance_for",
+    # demo
+    "run_demo",
+    "DemoResult",
 ]
