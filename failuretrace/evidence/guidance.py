@@ -44,6 +44,19 @@ def build_guidance(
     warnings: list[str] = []
     ids: list[str] = []
 
+    def _distinct_trials(group: list[RetrievedFailure]) -> int:
+        """Count *distinct source trials* behind a group of hypotheses. The same physical
+        failure recorded twice (e.g. live hook + offline backfill of one commit) collapses
+        to a single observation, so a duplicate can never manufacture "repeated" evidence."""
+        identities: set[tuple[str, str]] = set()
+        for rf in group:
+            trial = repository.get_trial(rf.hypothesis.trial_id)
+            if trial is not None and trial.git_commit:
+                identities.add(("commit", trial.git_commit))
+            else:
+                identities.add(("trial", rf.hypothesis.trial_id))
+        return len(identities)
+
     by_category: dict[FailureCategory, list[RetrievedFailure]] = defaultdict(list)
     for rf in retrieved:
         by_category[rf.hypothesis.category].append(rf)
@@ -51,11 +64,12 @@ def build_guidance(
 
     # Repeated instability -> warning + soft penalty (never hard on its own).
     instability = by_category.get(FailureCategory.likely_instability, [])
-    if len(instability) >= min_repeat:
-        warnings.append(f"repeated instability across {len(instability)} similar prior trials")
+    n_instability = _distinct_trials(instability)
+    if n_instability >= min_repeat:
+        warnings.append(f"repeated instability across {n_instability} similar prior trials")
         soft.append({
             "kind": "soft_penalty", "category": "likely_instability",
-            "variable": "optimizer.lr", "reason": f"repeated instability in {len(instability)} nearby trials",
+            "variable": "optimizer.lr", "reason": f"repeated instability in {n_instability} nearby trials",
         })
     elif instability:
         soft.append({
@@ -65,11 +79,12 @@ def build_guidance(
 
     # Repeated deterministic OOM -> hard resource constraint; single -> soft.
     resource = by_category.get(FailureCategory.resource_pressure, [])
-    if len(resource) >= min_repeat:
+    n_resource = _distinct_trials(resource)
+    if n_resource >= min_repeat:
         hard.append({
             "kind": "hard_constraint", "category": "resource_pressure",
             "variable": "DEVICE_BATCH_SIZE",
-            "reason": f"repeated deterministic OOM in {len(resource)} nearby trials",
+            "reason": f"repeated deterministic OOM in {n_resource} nearby trials",
         })
     elif resource:
         soft.append({

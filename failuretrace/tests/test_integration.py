@@ -159,6 +159,11 @@ def test_ingest_results_tsv_backfills_non_keep_rows(make_env, tmp_path):
     statuses = {t.status for t in recorded}
     assert TrialStatus.rejected in statuses and TrialStatus.failed_runtime in statuses
 
+    # idempotent: re-scanning the same TSV records nothing twice (commits already present)
+    again = ingest_results_tsv(settings=settings, repository=repo, tsv_path=tsv, repo_path=str(repo_root))
+    assert again == []
+    assert len(repo.list_trials()) == 2
+
 
 # --- optimizer adapter ----------------------------------------------------------
 def test_guidance_for_produces_search_guidance(make_env):

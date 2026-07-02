@@ -15,7 +15,22 @@ from failuretrace import (
     load_settings,
 )
 from failuretrace.core.ids import new_promotion_id
+from failuretrace.store.errors import PromotionViolation
 from failuretrace.store.sqlite_store import connect
+
+
+def _c1(hyp_id, settings, **over):
+    base = dict(
+        promotion_id=new_promotion_id(),
+        hypothesis_id=hyp_id,
+        from_level=CausalSupportLevel.C1_plausible_hypothesis,
+        to_level=CausalSupportLevel.C2_replicated_effect,
+        supporting_trial_ids=["t1", "t2"],
+        rationale="two matched-seed replications",
+        settings_hash=settings.settings_hash(),
+    )
+    base.update(over)
+    return PromotionRecord(**base)
 
 
 def _schema_snapshot(db_path):
@@ -55,7 +70,7 @@ def test_t16_initialize_database_idempotent(settings):
             "SELECT version FROM schema_version ORDER BY version")]
     finally:
         conn.close()
-    assert versions == [1, 2]  # each step applied exactly once
+    assert versions == [1, 2, 3]  # each step applied exactly once
 
 
 # --- write-once / immutability --------------------------------------------------
@@ -66,8 +81,10 @@ def test_trial_write_once(repo, make_trial):
         repo.save_trial(trial)
 
 
-def test_soft_hypothesis_saves_without_justification(repo, make_hypothesis):
-    hyp = make_hypothesis(should_apply_soft_penalty=True)
+def test_soft_hypothesis_saves_without_justification(repo, make_hypothesis, make_trial):
+    trial = make_trial()
+    repo.save_trial(trial)
+    hyp = make_hypothesis(trial_id=trial.trial_id, should_apply_soft_penalty=True)
     repo.save_hypothesis(hyp)
     stored = repo.get_hypothesis(hyp.hypothesis_id)
     assert stored is not None
@@ -75,14 +92,29 @@ def test_soft_hypothesis_saves_without_justification(repo, make_hypothesis):
     assert stored == hyp
 
 
+def test_hypothesis_referencing_unknown_trial_is_refused(repo, make_hypothesis):
+    from failuretrace import StoreError
+
+    hyp = make_hypothesis(trial_id="trial_does_not_exist")
+    with pytest.raises(StoreError):  # ReferentialIntegrityError
+        repo.save_hypothesis(hyp)
+
+
 # --- effective causal level via append-only promotion ---------------------------
-def test_effective_causal_level_via_promotion(repo, make_hypothesis, settings):
-    hyp = make_hypothesis()  # C1
+def test_effective_causal_level_via_promotion(repo, make_hypothesis, settings, make_trial):
+    trial = make_trial()
+    repo.save_trial(trial)
+    hyp = make_hypothesis(trial_id=trial.trial_id)  # C1
     repo.save_hypothesis(hyp)
     assert repo.effective_causal_level(hyp.hypothesis_id) == (
         CausalSupportLevel.C1_plausible_hypothesis
     )
 
+    # supporting trials must be real (write-path gate + FK)
+    t1 = make_trial(trial_id="t1", seed=1)
+    t2 = make_trial(trial_id="t2", seed=2)
+    repo.save_trial(t1)
+    repo.save_trial(t2)
     repo.save_promotion(
         PromotionRecord(
             promotion_id=new_promotion_id(),
@@ -103,9 +135,45 @@ def test_effective_causal_level_via_promotion(repo, make_hypothesis, settings):
     )
 
 
+# --- promotion write-time evidence gate (audit probes 1 & 3) --------------------
+def test_promotion_for_unknown_hypothesis_is_refused(repo, settings):
+    with pytest.raises(PromotionViolation):
+        repo.save_promotion(_c1("hyp_does_not_exist", settings))
+
+
+def test_promotion_with_fabricated_supporting_trials_is_refused(repo, make_hypothesis, make_trial, settings):
+    trial = make_trial()
+    repo.save_trial(trial)
+    hyp = make_hypothesis(trial_id=trial.trial_id)
+    repo.save_hypothesis(hyp)
+    # supporting trials "t1"/"t2" were never persisted -> the gate refuses the promotion
+    with pytest.raises(PromotionViolation):
+        repo.save_promotion(_c1(hyp.hypothesis_id, settings))
+
+
+def test_promotion_ladder_cannot_be_skipped(repo, make_hypothesis, make_trial, settings):
+    trial = make_trial()
+    repo.save_trial(trial)
+    hyp = make_hypothesis(trial_id=trial.trial_id)  # effective level C1
+    repo.save_hypothesis(hyp)
+    t1, t2 = make_trial(trial_id="t1", seed=1), make_trial(trial_id="t2", seed=2)
+    repo.save_trial(t1)
+    repo.save_trial(t2)
+    # a C2->C3 promotion while the hypothesis is still effectively C1 must be refused
+    with pytest.raises(PromotionViolation):
+        repo.save_promotion(_c1(
+            hyp.hypothesis_id, settings,
+            from_level=CausalSupportLevel.C2_replicated_effect,
+            to_level=CausalSupportLevel.C3_counterfactual_supported,
+        ))
+
+
 # --- hard-constraint write-time gate --------------------------------------------
-def test_hard_constraint_refused_without_justification(repo, make_hypothesis):
+def test_hard_constraint_refused_without_justification(repo, make_hypothesis, make_trial):
+    trial = make_trial()
+    repo.save_trial(trial)
     hyp = make_hypothesis(
+        trial_id=trial.trial_id,
         category=FailureCategory.resource_pressure,
         alternative_explanations=[],
         should_apply_hard_constraint=True,
@@ -114,8 +182,11 @@ def test_hard_constraint_refused_without_justification(repo, make_hypothesis):
         repo.save_hypothesis(hyp)  # no repeated / objective limit / C2
 
 
-def test_hard_constraint_allowed_when_objective_limit_exceeded(repo, make_hypothesis):
+def test_hard_constraint_allowed_when_objective_limit_exceeded(repo, make_hypothesis, make_trial):
+    trial = make_trial()
+    repo.save_trial(trial)
     hyp = make_hypothesis(
+        trial_id=trial.trial_id,
         category=FailureCategory.resource_pressure,
         alternative_explanations=[],
         should_apply_hard_constraint=True,
@@ -124,8 +195,11 @@ def test_hard_constraint_allowed_when_objective_limit_exceeded(repo, make_hypoth
     assert repo.get_hypothesis(hyp.hypothesis_id) is not None
 
 
-def test_hard_constraint_allowed_when_deterministic_and_repeated(repo, make_hypothesis):
+def test_hard_constraint_allowed_when_deterministic_and_repeated(repo, make_hypothesis, make_trial):
+    trial = make_trial()
+    repo.save_trial(trial)
     hyp = make_hypothesis(
+        trial_id=trial.trial_id,
         category=FailureCategory.resource_pressure,
         alternative_explanations=[],
         should_apply_hard_constraint=True,

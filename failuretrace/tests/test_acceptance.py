@@ -73,13 +73,14 @@ def test_ac3_deterministic_classifier_returns_explainable_category(settings):
 
 
 # --- AC4 (active, phase 3) ------------------------------------------------------
-def test_ac4_fallback_hypothesis_persisted_when_ollama_disabled(make_env):
+def test_ac4_fallback_hypothesis_persisted_when_ollama_disabled(make_env, make_trial):
     from failuretrace import classify
     from failuretrace.analyst import analyze
     from failuretrace.core.enums import HypothesisSource
     from failuretrace.tests.fixtures.scenarios import instability
 
     settings, repo = make_env(ollama_enabled=False)
+    repo.save_trial(make_trial(trial_id="ac4"))  # a hypothesis requires its trial
     ctx = instability()
     classification = classify(ctx, settings)
     hyp = analyze(classification, ctx, trial_id="ac4", settings=settings, repository=repo)
@@ -149,12 +150,13 @@ def test_ac8_counterfactual_plan_generated_without_execution(settings):
 
 
 # --- AC9 (active, phase 4) ------------------------------------------------------
-def test_ac9_replication_gate_prevents_single_trial_c2_plus(settings):
+def test_ac9_replication_gate_prevents_single_trial_c2_plus(make_env):
     from failuretrace import ReplicationEvidence, evaluate_replication
 
+    settings, repo = make_env(ollama_enabled=False)
     single = evaluate_replication(
         "h", [ReplicationEvidence(trial_id="t1", seed=42)],
-        settings=settings, replication_group_id="g",
+        settings=settings, repository=repo, replication_group_id="g",
     )
     assert single is None
 

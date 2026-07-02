@@ -32,6 +32,47 @@ def _hypothesis(settings, scenario_ctx, trial_id="trial_p"):
     return build_fallback(classification, scenario_ctx, trial_id=trial_id, settings=settings)
 
 
+# --- helpers that persist real trials/hypotheses and walk the promotion ladder ----
+def _instability_trial(make_trial, *, trial_id, seed):
+    return make_trial(
+        trial_id=trial_id, seed=seed, changed_components=["optimizer"],
+        hyperparameters={"MATRIX_LR": 0.08}, baseline_metric=1.0, post_change_metric=1.15,
+    )
+
+
+def _persist_c1(repo, settings, make_trial, *, trial_id="src", seed=42):
+    trial = _instability_trial(make_trial, trial_id=trial_id, seed=seed)
+    repo.save_trial(trial)
+    hyp = build_fallback(classify(instability(), settings), instability(),
+                         trial_id=trial.trial_id, settings=settings)
+    repo.save_hypothesis(hyp)
+    return trial, hyp
+
+
+def _replicate(repo, settings, make_trial, hyp, *, seeds=(1, 2)):
+    evidence = []
+    for s in seeds:
+        t = _instability_trial(make_trial, trial_id=f"rep{s}", seed=s)
+        repo.save_trial(t)
+        evidence.append(ReplicationEvidence(trial_id=t.trial_id, seed=s))
+    return evaluate_replication(
+        hyp.hypothesis_id, evidence, settings=settings, repository=repo, replication_group_id="g",
+    )
+
+
+def _promote_c2(repo, settings, make_trial, hyp):
+    repo.save_promotion(_replicate(repo, settings, make_trial, hyp))
+
+
+def _promote_c3(repo, settings, make_trial, hyp):
+    repo.save_plan(plan_counterfactual(hyp, settings=settings))
+    cf = make_trial(trial_id="cf", baseline_metric=1.0, post_change_metric=0.9)
+    repo.save_trial(cf)
+    res = CounterfactualResult(trial_id="cf", baseline_metric=1.0, post_change_metric=0.9,
+                               metric_direction=MetricDirection.minimize)
+    repo.save_promotion(evaluate_counterfactual(hyp.hypothesis_id, [res], settings=settings, repository=repo))
+
+
 # --- T10: planner holds every unrelated variable constant ------------------------
 @pytest.mark.parametrize("scenario", [instability, undertraining, overfitting, oom_crash])
 def test_t10_holds_unrelated_variables_constant(settings, scenario):
@@ -77,50 +118,79 @@ def test_single_variable_plan_has_no_coupled_variable(settings):
 
 
 # --- T7: the gate refuses C2 from a single trial --------------------------------
-def test_t7_gate_refuses_c2_from_single_trial(settings):
-    single = evaluate_replication(
-        "h1", [ReplicationEvidence(trial_id="t1", seed=42)],
-        settings=settings, replication_group_id="g1",
-    )
-    assert single is None
+def test_t7_gate_refuses_c2_from_single_trial(repo, settings, make_trial):
+    _, hyp = _persist_c1(repo, settings, make_trial)
 
-    two = evaluate_replication(
-        "h1",
-        [ReplicationEvidence(trial_id="t1", seed=42), ReplicationEvidence(trial_id="t2", seed=43)],
-        settings=settings, replication_group_id="g1",
+    one = _instability_trial(make_trial, trial_id="one", seed=42)
+    repo.save_trial(one)
+    single = evaluate_replication(
+        hyp.hypothesis_id, [ReplicationEvidence(trial_id="one", seed=42)],
+        settings=settings, repository=repo, replication_group_id="g1",
     )
+    assert single is None  # one seed < replication minimum
+
+    two = _replicate(repo, settings, make_trial, hyp)  # two distinct-seed real trials
     assert two is not None
     assert two.to_level == CausalSupportLevel.C2_replicated_effect
 
 
+def test_replication_ignores_fabricated_and_mismatched_evidence(repo, settings, make_trial):
+    _, hyp = _persist_c1(repo, settings, make_trial)
+    # trials that do not exist are ignored; a different-family trial does not count.
+    other = make_trial(trial_id="other", seed=7, changed_components=["data"],
+                       hyperparameters={"WEIGHT_DECAY": 0.3}, baseline_metric=1.0, post_change_metric=1.15)
+    repo.save_trial(other)
+    result = evaluate_replication(
+        hyp.hypothesis_id,
+        [ReplicationEvidence(trial_id="ghost", seed=1), ReplicationEvidence(trial_id="other", seed=7)],
+        settings=settings, repository=repo, replication_group_id="g",
+    )
+    assert result is None  # one ghost + one wrong-family => no qualifying replication
+
+
 # --- T14 extended: directional counterfactual result respected both ways ---------
-def test_t14_counterfactual_direction_respected():
+def test_t14_counterfactual_direction_respected(repo, settings, make_trial):
     # baseline 1.0 -> post 0.9 is an improvement under minimize, a regression under maximize.
-    from failuretrace import load_settings
-    settings = load_settings(env={})
+    _, hyp = _persist_c1(repo, settings, make_trial)
+    _promote_c2(repo, settings, make_trial, hyp)  # effective level now C2
+    repo.save_plan(plan_counterfactual(hyp, settings=settings))  # C3 requires a persisted plan
 
     minimize = CounterfactualResult(
         trial_id="c1", baseline_metric=1.0, post_change_metric=0.9,
         metric_direction=MetricDirection.minimize,
     )
-    assert evaluate_counterfactual("h", [minimize], settings=settings) is not None
+    assert evaluate_counterfactual(hyp.hypothesis_id, [minimize], settings=settings, repository=repo) is not None
 
     maximize = CounterfactualResult(
         trial_id="c1", baseline_metric=1.0, post_change_metric=0.9,
         metric_direction=MetricDirection.maximize,
     )
-    assert evaluate_counterfactual("h", [maximize], settings=settings) is None
+    assert evaluate_counterfactual(hyp.hypothesis_id, [maximize], settings=settings, repository=repo) is None
+
+
+def test_counterfactual_requires_c2_and_a_persisted_plan(repo, settings, make_trial):
+    _, hyp = _persist_c1(repo, settings, make_trial)  # only C1, no plan yet
+    result = CounterfactualResult(trial_id="c1", baseline_metric=1.0, post_change_metric=0.9,
+                                  metric_direction=MetricDirection.minimize)
+    # not yet C2 -> no C3
+    assert evaluate_counterfactual(hyp.hypothesis_id, [result], settings=settings, repository=repo) is None
+    _promote_c2(repo, settings, make_trial, hyp)  # now C2 but still no plan persisted
+    assert evaluate_counterfactual(hyp.hypothesis_id, [result], settings=settings, repository=repo) is None
 
 
 # --- C4 requires >=2 confirmations from >=2 distinct contexts --------------------
-def test_c4_requires_two_distinct_contexts(settings):
+def test_c4_requires_two_distinct_contexts(repo, settings, make_trial):
+    _, hyp = _persist_c1(repo, settings, make_trial)
+    _promote_c2(repo, settings, make_trial, hyp)
+    _promote_c3(repo, settings, make_trial, hyp)  # effective level now C3
+
     same_context = [
         CounterfactualResult(trial_id=f"c{i}", baseline_metric=1.0, post_change_metric=0.9,
                              metric_direction=MetricDirection.minimize,
                              changed_components=["optimizer"], config_hash="h1")
         for i in range(2)
     ]
-    assert evaluate_c4("h", same_context, settings=settings) is None  # 2 results, 1 context
+    assert evaluate_c4(hyp.hypothesis_id, same_context, settings=settings, repository=repo) is None
 
     distinct = [
         CounterfactualResult(trial_id="c1", baseline_metric=1.0, post_change_metric=0.9,
@@ -130,24 +200,15 @@ def test_c4_requires_two_distinct_contexts(settings):
                              metric_direction=MetricDirection.minimize,
                              changed_components=["data"], config_hash="h2"),
     ]
-    promotion = evaluate_c4("h", distinct, settings=settings)
+    promotion = evaluate_c4(hyp.hypothesis_id, distinct, settings=settings, repository=repo)
     assert promotion is not None
     assert promotion.to_level == CausalSupportLevel.C4_robust_rule
 
 
 # --- promotion persists and raises the effective level (not the record) ----------
 def test_replication_promotion_persists_and_raises_effective_level(repo, settings, make_trial):
-    trial = make_trial()
-    repo.save_trial(trial)
-    hyp = _hypothesis(settings, instability(), trial_id=trial.trial_id)
-    repo.save_hypothesis(hyp)
-
-    promotion = evaluate_replication(
-        hyp.hypothesis_id,
-        [ReplicationEvidence(trial_id="a", seed=1), ReplicationEvidence(trial_id="b", seed=2)],
-        settings=settings, replication_group_id="g",
-    )
-    repo.save_promotion(promotion)
+    _, hyp = _persist_c1(repo, settings, make_trial)
+    _promote_c2(repo, settings, make_trial, hyp)
 
     # the hypothesis record is unchanged; only the *effective* level moves.
     assert repo.get_hypothesis(hyp.hypothesis_id).causal_support_level == (

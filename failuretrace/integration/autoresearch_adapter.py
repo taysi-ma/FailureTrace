@@ -329,7 +329,21 @@ def ingest_results_tsv(
     recovered from git history only when the commit is still reachable, and per-trial
     telemetry beyond the row's val_bpb/memory is generally gone. Rows we cannot fully
     reconstruct are still recorded with what survives — nothing is silently dropped.
+
+    Idempotent: a commit already present in the store is skipped, so re-scanning the same
+    ``results.tsv`` (or backfilling commits the live hook already captured) records nothing
+    twice.
     """
+    if not settings.enabled:
+        logger.info("failuretrace disabled; ingest_results_tsv is a no-op")
+        return []
+    if repository is None:
+        from ..store.migrations import initialize_database
+        from ..store.repository import Repository
+
+        initialize_database(settings)
+        repository = Repository(settings)
+
     rows_recorded: list[TrialRecord] = []
     with open(tsv_path, "r", encoding="utf-8", newline="") as fh:
         reader = csv.DictReader(fh, delimiter="\t")
@@ -338,6 +352,9 @@ def ingest_results_tsv(
             if status == "keep" and not include_keep:
                 continue
             commit = (row.get("commit") or "").strip()
+            if commit and repository.count_trials_for_commit(commit) > 0:
+                logger.info("skipping already-recorded commit %s (idempotent backfill)", commit)
+                continue
             try:
                 val_bpb = float(row.get("val_bpb") or 0.0)
             except ValueError:

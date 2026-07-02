@@ -5,8 +5,9 @@ Turns rejected/crashed ML experiments into structured, uncertainty-aware failure
 hypotheses, stores them as reusable negative evidence, and uses them to guide future
 experimentation — **without ever claiming causality from a single trial**.
 
-Status: Phases 0–6 complete. Test suite: **135 passed, 0 skipped**, CPU-only, offline.
-All acceptance criteria **AC1–AC14** pass.
+Status: Phases 0–6 complete, plus a post-audit P0 hardening pass (evidence-checked
+promotion gate, idempotent ingestion, database foreign keys). Test suite:
+**142 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
 
 ---
 
@@ -47,9 +48,10 @@ conditions; confidence from a fixed rubric; everything runs CPU-only and offline
 - `core/` — `enums.py`, `models.py` (Pydantic, epistemic validators), `settings.py`
   (`improvement()`, `settings_hash()`), `ids.py`
 - `config/defaults.yaml` — every threshold / weight / flag (no magic numbers in code)
-- `store/` — `sqlite_store.py` (WAL + busy_timeout), `json_store.py` (write-once),
-  `migrations.py` (idempotent, schema v1+v2), `repository.py` (**the only write path**;
-  hard-constraint gate; effective-level computation)
+- `store/` — `sqlite_store.py` (WAL + busy_timeout; foreign keys enforced),
+  `json_store.py` (write-once), `migrations.py` (idempotent, schema v1–v3; v3 adds
+  referential-integrity foreign keys), `repository.py` (**the only write path**;
+  hard-constraint gate; **promotion evidence gate**; effective-level computation)
 - `telemetry/` — `schema.py`, `collector.py`, `adapters.py` (`parse_run_log`)
 - `classifier/` — `rules.py`, `classifier.py`, `thresholds.py`, `context.py`
 - `analyst/` — `fallback.py`, `ollama_client.py`, `prompt.py`, `service.py`
@@ -129,14 +131,26 @@ Claim strength lives **only** in `causal_support_level`; belief strength in
 hypothesis is never mutated); a hypothesis's *effective* level = its original level
 overridden by the highest valid promotion.
 
-- **C1 → C2** (`evaluate_replication`): the same intervention family observed across
-  `≥ replication_minimum_trials` distinct seeds / equivalent controlled trials (linked by a
-  `replication_group_id`). This structurally prevents any single trial from reaching C2+.
-- **C2 → C3** (`evaluate_counterfactual`): a planned counterfactual trial produced the
-  expected **directional** result, judged via `improvement()` under the configured metric
-  direction, with `≥ counterfactual_minimum_support` supporting counterfactuals.
+- **C1 → C2** (`evaluate_replication`): the same intervention family — matched by the
+  source trial's fingerprint (changed components + hyperparameter names) — reproduced
+  across `≥ replication_minimum_trials` distinct seeds / equivalent controlled trials
+  (linked by a `replication_group_id`), all pointing the **same** metric direction and
+  clearing the noise floor. Every supporting trial must exist in the store; fabricated or
+  wrong-family evidence is ignored. This structurally prevents any single trial from C2+.
+- **C2 → C3** (`evaluate_counterfactual`): the hypothesis is *currently* effective-C2, a
+  **persisted** `CounterfactualPlan` exists for it, and `≥ counterfactual_minimum_support`
+  counterfactual trials produced the expected **directional** result above the noise floor
+  (judged via `improvement()` under the configured metric direction).
 - **C3 → C4** (`evaluate_c4`, rare by design): `≥ c4_minimum_counterfactuals` independent
   confirmations from `≥ 2` distinct contexts (different changed components / configs).
+
+Every promotion is re-checked at the write path (`Repository.save_promotion`): the
+hypothesis and all supporting trials must exist, `from_level` must equal the hypothesis's
+*current* effective level (the ladder cannot be skipped), and a C2 promotion must carry at
+least the configured minimum of distinct supporting trials — so a causal upgrade is
+non-forgeable regardless of the caller. Database foreign keys (schema v3) reject dangling
+references, and duplicate ingestion of one physical failure cannot manufacture "repeated"
+evidence (guidance counts distinct source commits; offline backfill is idempotent).
 
 Hard constraints are permitted only for (a) deterministic **and** repeated failure, (b) an
 objectively-exceeded configured resource limit, or (c) effective level ≥ C2 — enforced at

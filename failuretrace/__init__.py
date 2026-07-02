@@ -34,7 +34,13 @@ from .core.models import (
     TrialRecord,
 )
 from .core.settings import Settings, get_settings, improvement, load_settings
-from .store.errors import DuplicateRecordError, HardConstraintViolation, StoreError
+from .store.errors import (
+    DuplicateRecordError,
+    HardConstraintViolation,
+    PromotionViolation,
+    ReferentialIntegrityError,
+    StoreError,
+)
 from .store.migrations import initialize_database
 from .store.repository import Repository
 from .telemetry import TelemetryRecord, normalize, parse_run_log, telemetry_from_run_log
@@ -101,6 +107,8 @@ __all__ = [
     "StoreError",
     "DuplicateRecordError",
     "HardConstraintViolation",
+    "ReferentialIntegrityError",
+    "PromotionViolation",
     # telemetry
     "TelemetryRecord",
     "normalize",

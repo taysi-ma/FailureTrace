@@ -83,10 +83,97 @@ CREATE TABLE IF NOT EXISTS plans (
 CREATE INDEX IF NOT EXISTS idx_plans_hyp ON plans(hypothesis_id);
 """
 
+# v3: add referential integrity. SQLite cannot ALTER TABLE ADD CONSTRAINT, so each child
+# table is rebuilt (create-with-FK, copy, drop, rename, re-index). Applied with foreign-key
+# enforcement OFF (see initialize_database) so the drop/rename ordering is not tripped;
+# subsequent normal connections open with enforcement ON. Parents are rebuilt before the
+# children that reference them. Legacy rows are copied verbatim (not re-validated).
+_DDL_V3 = """
+CREATE TABLE hypotheses_v3 (
+    hypothesis_id                TEXT PRIMARY KEY,
+    trial_id                     TEXT NOT NULL,
+    source                       TEXT NOT NULL,
+    category                     TEXT NOT NULL,
+    causal_support_level         TEXT NOT NULL,
+    should_apply_soft_penalty    INTEGER NOT NULL,
+    should_apply_hard_constraint INTEGER NOT NULL,
+    settings_hash                TEXT NOT NULL,
+    data                         TEXT NOT NULL,
+    FOREIGN KEY (trial_id) REFERENCES trials(trial_id)
+);
+INSERT INTO hypotheses_v3 SELECT
+    hypothesis_id, trial_id, source, category, causal_support_level,
+    should_apply_soft_penalty, should_apply_hard_constraint, settings_hash, data
+    FROM hypotheses;
+DROP TABLE hypotheses;
+ALTER TABLE hypotheses_v3 RENAME TO hypotheses;
+CREATE INDEX IF NOT EXISTS idx_hypotheses_trial    ON hypotheses(trial_id);
+CREATE INDEX IF NOT EXISTS idx_hypotheses_category ON hypotheses(category);
+
+CREATE TABLE promotions_v3 (
+    promotion_id            TEXT PRIMARY KEY,
+    hypothesis_id           TEXT NOT NULL,
+    from_level              TEXT NOT NULL,
+    to_level                TEXT NOT NULL,
+    replication_group_id    TEXT,
+    counterfactual_trial_id TEXT,
+    timestamp               TEXT NOT NULL,
+    data                    TEXT NOT NULL,
+    FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id),
+    FOREIGN KEY (counterfactual_trial_id) REFERENCES trials(trial_id)
+);
+INSERT INTO promotions_v3 SELECT
+    promotion_id, hypothesis_id, from_level, to_level, replication_group_id,
+    counterfactual_trial_id, timestamp, data
+    FROM promotions;
+DROP TABLE promotions;
+ALTER TABLE promotions_v3 RENAME TO promotions;
+CREATE INDEX IF NOT EXISTS idx_promotions_hyp ON promotions(hypothesis_id);
+
+CREATE TABLE plans_v3 (
+    plan_id                       TEXT PRIMARY KEY,
+    hypothesis_id                 TEXT NOT NULL,
+    primary_intervention_variable TEXT NOT NULL,
+    coupled_variable              TEXT,
+    settings_hash                 TEXT NOT NULL,
+    data                          TEXT NOT NULL,
+    FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id)
+);
+INSERT INTO plans_v3 SELECT
+    plan_id, hypothesis_id, primary_intervention_variable, coupled_variable,
+    settings_hash, data
+    FROM plans;
+DROP TABLE plans;
+ALTER TABLE plans_v3 RENAME TO plans;
+CREATE INDEX IF NOT EXISTS idx_plans_hyp ON plans(hypothesis_id);
+
+CREATE TABLE links_v3 (
+    link_id                 TEXT PRIMARY KEY,
+    link_type               TEXT NOT NULL,
+    hypothesis_id           TEXT,
+    trial_id                TEXT,
+    source_trial_id         TEXT,
+    counterfactual_trial_id TEXT,
+    replication_group_id    TEXT,
+    timestamp               TEXT NOT NULL,
+    data                    TEXT NOT NULL,
+    FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id),
+    FOREIGN KEY (trial_id) REFERENCES trials(trial_id)
+);
+INSERT INTO links_v3 SELECT
+    link_id, link_type, hypothesis_id, trial_id, source_trial_id,
+    counterfactual_trial_id, replication_group_id, timestamp, data
+    FROM links;
+DROP TABLE links;
+ALTER TABLE links_v3 RENAME TO links;
+CREATE INDEX IF NOT EXISTS idx_links_hyp ON links(hypothesis_id);
+"""
+
 # (version, ddl) applied in ascending order. Append new steps; never edit shipped ones.
 SCHEMA_STEPS: list[tuple[int, str]] = [
     (1, _DDL_V1),
     (2, _DDL_V2),
+    (3, _DDL_V3),
 ]
 
 
@@ -96,7 +183,9 @@ def initialize_database(settings: Settings) -> Path:
     data_dir.mkdir(parents=True, exist_ok=True)
     db_path = data_dir / "failuretrace.db"
 
-    conn = connect(db_path)
+    # Enforcement OFF during migration so the v3 table rebuild (drop/rename/copy) is not
+    # tripped by foreign keys; the pragma must be set before any transaction begins.
+    conn = connect(db_path, enforce_fks=False)
     try:
         with conn:
             conn.execute(

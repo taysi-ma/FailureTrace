@@ -87,8 +87,9 @@ def test_fallback_produces_valid_hypothesis(settings, name):
 
 
 # --- T6: Ollama unavailable / garbage -> safe fallback persisted -----------------
-def test_t6_ollama_unroutable_falls_back(make_env):
+def test_t6_ollama_unroutable_falls_back(make_env, make_trial):
     settings, repo = make_env(ollama_enabled=True)
+    repo.save_trial(make_trial(trial_id="t6a"))
     ctx = instability()
     classification = classify(ctx, settings)
     client = _StubClient(raise_exc=OllamaError("unroutable URL"))
@@ -97,8 +98,9 @@ def test_t6_ollama_unroutable_falls_back(make_env):
     assert repo.get_hypothesis(hyp.hypothesis_id) is not None
 
 
-def test_t6_ollama_garbage_json_falls_back(make_env):
+def test_t6_ollama_garbage_json_falls_back(make_env, make_trial):
     settings, repo = make_env(ollama_enabled=True)
+    repo.save_trial(make_trial(trial_id="t6b"))
     ctx = instability()
     classification = classify(ctx, settings)
     client = _StubClient(response_text="not valid json {{{")
@@ -115,8 +117,9 @@ def test_ollama_client_unroutable_raises():
 
 
 # --- LLM success enriches, but deterministic fields stay authoritative -----------
-def test_llm_success_enriches_hypothesis(make_env):
+def test_llm_success_enriches_hypothesis(make_env, make_trial):
     settings, repo = make_env(ollama_enabled=True)
+    repo.save_trial(make_trial(trial_id="t_llm"))
     ctx = instability()
     classification = classify(ctx, settings)
     client = _StubClient(response_text=LLM_JSON)
@@ -148,8 +151,9 @@ def test_t8_inconclusive_never_hard(settings):
 
 
 # --- T9: single OOM -> no persistent hard constraint unless objective limit exceeded
-def test_t9_single_oom_no_hard_constraint_by_default(make_env):
+def test_t9_single_oom_no_hard_constraint_by_default(make_env, make_trial):
     settings, repo = make_env(ollama_enabled=False)  # resource_vram_limit_gb is null
+    repo.save_trial(make_trial(trial_id="t9a"))
     ctx = oom_crash()
     classification = classify(ctx, settings)
     hyp = analyze(classification, ctx, trial_id="t9a", settings=settings, repository=repo)
@@ -158,8 +162,9 @@ def test_t9_single_oom_no_hard_constraint_by_default(make_env):
     assert repo.get_hypothesis(hyp.hypothesis_id).should_apply_hard_constraint is False
 
 
-def test_t9_single_oom_hard_constraint_when_limit_exceeded(make_env):
+def test_t9_single_oom_hard_constraint_when_limit_exceeded(make_env, make_trial):
     settings, repo = make_env(ollama_enabled=False, thresholds={"resource_vram_limit_gb": 40.0})
+    repo.save_trial(make_trial(trial_id="t9b"))
     ctx = oom_crash()  # default telemetry peak_vram_gb = 80.0 >= 40.0
     classification = classify(ctx, settings)
     hyp = analyze(classification, ctx, trial_id="t9b", settings=settings, repository=repo)

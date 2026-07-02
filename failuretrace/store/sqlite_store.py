@@ -20,20 +20,26 @@ from ..core.models import (
     TrialRecord,
 )
 from ..core.settings import Settings
-from .errors import DuplicateRecordError
+from .errors import DuplicateRecordError, ReferentialIntegrityError
 
 logger = logging.getLogger(__name__)
 
 BUSY_TIMEOUT_MS = 5000
 
 
-def connect(db_path: str | Path) -> sqlite3.Connection:
-    """Open a connection with WAL + busy timeout and row access by name."""
+def connect(db_path: str | Path, *, enforce_fks: bool = True) -> sqlite3.Connection:
+    """Open a connection with WAL + busy timeout and row access by name.
+
+    ``enforce_fks`` toggles ``PRAGMA foreign_keys``. Normal reads/writes enforce foreign
+    keys (schema v3) so a dangling reference is rejected at the database level. The schema
+    migrator opens with ``enforce_fks=False`` so the v3 table rebuild (drop/rename/copy)
+    is not tripped by enforcement; the pragma must be set before any transaction begins.
+    """
     conn = sqlite3.connect(str(db_path), timeout=BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS};")
-    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute(f"PRAGMA foreign_keys={'ON' if enforce_fks else 'OFF'};")
     return conn
 
 
@@ -53,6 +59,12 @@ class SqliteStore:
             with conn:
                 conn.execute(sql, params)
         except sqlite3.IntegrityError as exc:
+            # A UNIQUE/PK collision means the append-only record already exists; a FOREIGN
+            # KEY failure means it references a parent row that does not — distinct errors.
+            if "FOREIGN KEY" in str(exc):
+                raise ReferentialIntegrityError(
+                    f"{what} references a non-existent parent row"
+                ) from exc
             raise DuplicateRecordError(f"{what} already exists (append-only)") from exc
         finally:
             conn.close()
@@ -97,6 +109,15 @@ class SqliteStore:
     def list_trials(self) -> list[TrialRecord]:
         rows = self._fetchall("SELECT data FROM trials ORDER BY timestamp, trial_id")
         return [TrialRecord.model_validate_json(r["data"]) for r in rows]
+
+    def trial_exists(self, trial_id: str) -> bool:
+        return self._fetchone("SELECT 1 FROM trials WHERE trial_id=?", (trial_id,)) is not None
+
+    def count_trials_for_commit(self, git_commit: str) -> int:
+        row = self._fetchone(
+            "SELECT COUNT(*) AS n FROM trials WHERE git_commit=?", (git_commit,)
+        )
+        return int(row["n"]) if row else 0
 
     # --- hypotheses -------------------------------------------------------------
     def insert_hypothesis(self, rec: FailureHypothesis) -> None:

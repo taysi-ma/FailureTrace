@@ -150,7 +150,7 @@ def run_demo(settings: Settings | None = None, *, repository: Repository | None 
         evidence = [ReplicationEvidence(trial_id=t.trial_id, seed=t.seed) for t, _ in instability_group]
         promotion = evaluate_replication(
             representative.hypothesis_id, evidence,
-            settings=settings, replication_group_id=group_id,
+            settings=settings, repository=repository, replication_group_id=group_id,
         )
         if promotion is not None:
             repository.save_promotion(promotion)

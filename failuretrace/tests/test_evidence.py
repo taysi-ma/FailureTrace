@@ -65,8 +65,10 @@ def test_t13_score_explanations_present(repo, settings, make_trial):
 
 # --- guidance: soft-default, hard only for repeated deterministic / C2+ ----------
 def test_guidance_repeated_instability_is_soft_with_warning(repo, settings, make_trial):
-    for _ in range(2):
-        _seed(repo, settings, make_trial, instability(), changed_components=["optimizer"])
+    # distinct commits => genuinely distinct trials (same-commit duplicates are deduped)
+    for i in range(2):
+        _seed(repo, settings, make_trial, instability(),
+              trial_id=f"inst{i}", git_commit=f"commit{i}", changed_components=["optimizer"])
     ic = InterventionContext(category=FailureCategory.likely_instability, changed_components=["optimizer"])
     retrieved = retrieve_relevant_failures(ic, repository=repo, settings=settings)
     guidance = build_guidance(retrieved, settings=settings, repository=repo)
@@ -76,12 +78,25 @@ def test_guidance_repeated_instability_is_soft_with_warning(repo, settings, make
 
 
 def test_guidance_repeated_oom_is_hard_constraint(repo, settings, make_trial):
-    for _ in range(2):
-        _seed(repo, settings, make_trial, oom_crash(), changed_components=["optimizer"])
+    for i in range(2):
+        _seed(repo, settings, make_trial, oom_crash(),
+              trial_id=f"oom{i}", git_commit=f"commit{i}", changed_components=["optimizer"])
     ic = InterventionContext(category=FailureCategory.resource_pressure)
     retrieved = retrieve_relevant_failures(ic, repository=repo, settings=settings)
     guidance = build_guidance(retrieved, settings=settings, repository=repo)
     assert guidance.hard_constraints
+
+
+def test_guidance_duplicate_commit_does_not_manufacture_hard_constraint(repo, settings, make_trial):
+    # The SAME physical OOM recorded twice (same commit) must stay soft — one observation.
+    for i in range(2):
+        _seed(repo, settings, make_trial, oom_crash(),
+              trial_id=f"dup{i}", git_commit="same_commit", changed_components=["optimizer"])
+    ic = InterventionContext(category=FailureCategory.resource_pressure)
+    retrieved = retrieve_relevant_failures(ic, repository=repo, settings=settings)
+    guidance = build_guidance(retrieved, settings=settings, repository=repo)
+    assert not guidance.hard_constraints
+    assert guidance.soft_penalties
 
 
 def test_guidance_inconclusive_is_context_only(repo, settings, make_trial):
@@ -95,6 +110,9 @@ def test_guidance_inconclusive_is_context_only(repo, settings, make_trial):
 
 def test_guidance_c2_evidence_is_hard_constraint(repo, settings, make_trial):
     _, hyp = _seed(repo, settings, make_trial, instability(), changed_components=["optimizer"])
+    # supporting trials must be real (write-path gate + FK)
+    repo.save_trial(make_trial(trial_id="a", seed=1))
+    repo.save_trial(make_trial(trial_id="b", seed=2))
     repo.save_promotion(PromotionRecord(
         promotion_id=new_promotion_id(),
         hypothesis_id=hyp.hypothesis_id,
