@@ -119,6 +119,13 @@ class SqliteStore:
         )
         return int(row["n"]) if row else 0
 
+    def trial_id_for_commit(self, git_commit: str) -> str | None:
+        row = self._fetchone(
+            "SELECT trial_id FROM trials WHERE git_commit=? ORDER BY timestamp, trial_id LIMIT 1",
+            (git_commit,),
+        )
+        return row["trial_id"] if row else None
+
     # --- hypotheses -------------------------------------------------------------
     def insert_hypothesis(self, rec: FailureHypothesis) -> None:
         self._insert(

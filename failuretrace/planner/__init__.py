@@ -8,6 +8,7 @@ from .replication import (
     evaluate_c4,
     evaluate_counterfactual,
     evaluate_replication,
+    promote_replications,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "evaluate_replication",
     "evaluate_counterfactual",
     "evaluate_c4",
+    "promote_replications",
 ]

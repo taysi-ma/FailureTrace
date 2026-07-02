@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..core.enums import FailureCategory, MetricDirection
+from ..core.enums import CausalSupportLevel, FailureCategory, MetricDirection
 from ..core.models import FailureHypothesis
 from ..core.settings import Settings
 from ..store.repository import Repository
@@ -53,6 +53,8 @@ class RetrievedFailure(BaseModel):
     hypothesis: FailureHypothesis
     relevance_score: float
     score_explanation: list[str]
+    # Effective (post-promotion) causal level, so consumers never understate a promotion.
+    effective_level: CausalSupportLevel | None = None
 
 
 def _is_numeric(value: Any) -> bool:
@@ -169,11 +171,13 @@ def retrieve_relevant_failures(
     for hyp in repository.list_hypotheses():
         trial = repository.get_trial(hyp.trial_id)
         score, explanation = _score(intervention_context, hyp, trial, cfg, repository, now)
+        effective = repository.effective_causal_level(hyp.hypothesis_id) or hyp.causal_support_level
         scored.append(
             RetrievedFailure(
                 hypothesis=hyp,
                 relevance_score=round(score, 4),
                 score_explanation=explanation,
+                effective_level=effective,
             )
         )
     scored.sort(key=lambda rf: rf.relevance_score, reverse=True)

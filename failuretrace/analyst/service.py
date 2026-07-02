@@ -47,10 +47,12 @@ def _merge_llm(fallback: FailureHypothesis, data: dict) -> FailureHypothesis:
         value = data.get(key)
         if isinstance(value, list) and value:
             fields[key] = [str(item) for item in value]
-    for key in ("hypothesis_confidence", "evidence_quality"):
-        value = data.get(key)
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            fields[key] = float(value)
+    # The LLM's stated confidence is recorded for provenance only; the deterministic
+    # rubric values in hypothesis_confidence / evidence_quality are NEVER overwritten
+    # (Cross-Cutting Invariant 5). Bound it to [0, 1] and ignore anything else.
+    llm_conf = data.get("hypothesis_confidence")
+    if isinstance(llm_conf, (int, float)) and not isinstance(llm_conf, bool):
+        fields["llm_confidence"] = min(1.0, max(0.0, float(llm_conf)))
     if isinstance(data.get("suggested_intervention"), dict):
         fields["suggested_intervention"] = data["suggested_intervention"]
     if isinstance(data.get("proposed_counterfactual_trial"), dict):

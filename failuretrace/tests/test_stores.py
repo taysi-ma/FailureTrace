@@ -70,7 +70,7 @@ def test_t16_initialize_database_idempotent(settings):
             "SELECT version FROM schema_version ORDER BY version")]
     finally:
         conn.close()
-    assert versions == [1, 2, 3]  # each step applied exactly once
+    assert versions == [1, 2, 3, 4]  # each step applied exactly once
 
 
 # --- write-once / immutability --------------------------------------------------
@@ -79,6 +79,22 @@ def test_trial_write_once(repo, make_trial):
     repo.save_trial(trial)
     with pytest.raises(DuplicateRecordError):
         repo.save_trial(trial)
+
+
+def test_immutability_is_physical_update_and_delete_blocked(repo, make_trial):
+    import sqlite3
+
+    trial = make_trial()
+    repo.save_trial(trial)
+    conn = connect(repo.sqlite.db_path)
+    try:
+        for op in ("UPDATE trials SET status='promoted'", "DELETE FROM trials"):
+            with pytest.raises(sqlite3.Error):  # BEFORE UPDATE/DELETE trigger raises
+                with conn:
+                    conn.execute(op)
+    finally:
+        conn.close()
+    assert repo.get_trial(trial.trial_id).status == trial.status  # unchanged
 
 
 def test_soft_hypothesis_saves_without_justification(repo, make_hypothesis, make_trial):

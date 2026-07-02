@@ -24,7 +24,7 @@ from .core.settings import Settings, get_settings
 from .classifier.context import ClassificationContext
 from .evidence import InterventionContext, build_guidance, retrieve_relevant_failures, summarize_failures
 from .integration.autoresearch_adapter import record_rejected_trial
-from .planner import ReplicationEvidence, evaluate_replication, plan_counterfactual
+from .planner import promote_replications
 from .reporting import write_failure_map, write_summary
 from .store.migrations import initialize_database
 from .store.repository import Repository
@@ -140,24 +140,17 @@ def run_demo(settings: Settings | None = None, *, repository: Repository | None 
         if tag == "instability" and trial is not None and hyp is not None:
             instability_group.append((trial, hyp))
 
-    # --- replication-gate promotion on the multi-seed instability group (C1 -> C2) ---
-    group_id = new_replication_group_id()
-    promoted_id: str | None = None
-    supporting = 0
+    # --- replication gate: scan C1 hypotheses, promote replicated groups (C1 -> C2) ---
+    # Uses the real driver (also emits append-only replication links). Single trials stay
+    # C0/C1; only the multi-seed instability group has enough distinct units to reach C2.
+    promotions = promote_replications(repository, settings)
+    group_id = promotions[0].replication_group_id if promotions else new_replication_group_id()
+    promoted_id: str | None = promotions[0].hypothesis_id if promotions else None
+    supporting = len(promotions[0].supporting_trial_ids) if promotions else 0
     effective_level: str | None = None
-    if instability_group:
-        representative = instability_group[0][1]
-        evidence = [ReplicationEvidence(trial_id=t.trial_id, seed=t.seed) for t, _ in instability_group]
-        promotion = evaluate_replication(
-            representative.hypothesis_id, evidence,
-            settings=settings, repository=repository, replication_group_id=group_id,
-        )
-        if promotion is not None:
-            repository.save_promotion(promotion)
-            promoted_id = representative.hypothesis_id
-            supporting = len(promotion.supporting_trial_ids)
-            level = repository.effective_causal_level(representative.hypothesis_id)
-            effective_level = level.value if level else None
+    if promoted_id:
+        level = repository.effective_causal_level(promoted_id)
+        effective_level = level.value if level else None
 
     # --- retrieval for a NEW intervention context (a nearby instability idea) ---
     intervention = InterventionContext(
@@ -169,15 +162,15 @@ def run_demo(settings: Settings | None = None, *, repository: Repository | None 
     retrieved = retrieve_relevant_failures(intervention, repository=repository, settings=settings)
     guidance = build_guidance(retrieved, settings=settings, repository=repository)
 
-    # --- counterfactual plan (returned only; never executed) ---
+    # --- counterfactual plan (auto-created at ingestion; returned only, never executed) ---
     plan_id: str | None = None
     plan_variable: str | None = None
-    if instability_group:
-        plan = plan_counterfactual(instability_group[0][1], settings=settings)
-        if plan is not None:
-            repository.save_plan(plan)
-            plan_id = plan.plan_id
-            plan_variable = plan.primary_intervention_variable
+    plan_source_id = promoted_id or (instability_group[0][1].hypothesis_id if instability_group else None)
+    if plan_source_id:
+        plans = repository.list_plans_for_hypothesis(plan_source_id)
+        if plans:
+            plan_id = plans[0].plan_id
+            plan_variable = plans[0].primary_intervention_variable
 
     # --- reports ---
     summary_path = write_summary(repository, settings)

@@ -141,6 +141,54 @@ def test_record_from_run_captures_diff_and_hyperparams(make_env, tmp_path):
     assert trial.hyperparameters.get("MATRIX_LR") == 0.08           # tunables parsed at commit
 
 
+def test_record_from_run_sets_config_hash_and_parent_lineage(make_env, tmp_path):
+    settings, repo = make_env(ollama_enabled=False)
+    repo_root = tmp_path / "autoresearch"
+    base, exp = _make_git_repo(repo_root)
+
+    baseline = record_from_run(
+        settings=settings, repository=repo, commit=base, status="discard",
+        run_log_text=_RUN_LOG, repo_path=str(repo_root), baseline_metric=1.0,
+    )
+    experiment = record_from_run(
+        settings=settings, repository=repo, commit=exp, status="discard",
+        run_log_text=_RUN_LOG, repo_path=str(repo_root), baseline_metric=1.0, baseline_commit=base,
+    )
+    # config identity from the tunable block, and parent linked to the recorded baseline (#6)
+    assert experiment.config_hash is not None
+    assert experiment.config_hash != baseline.config_hash  # MATRIX_LR differs
+    assert experiment.parent_trial_id == baseline.trial_id
+
+
+def test_collect_telemetry_false_ingests_without_telemetry(make_env):
+    settings, repo = make_env(ollama_enabled=False, collect_telemetry=False)
+    trial = record_rejected_trial(
+        {"git_commit": "x", "status": "discard", "baseline_metric": 1.0, "changed_components": ["optimizer"]},
+        {"post_change_metric": 1.15},
+        "d",
+        {"telemetry": {"gradient_norm_mean": 1.0, "gradient_norm_std": 3.0, "val_metric": 1.15}, "finished": True},
+        settings=settings, repository=repo,
+    )
+    assert trial.telemetry.get("gradient_norm_mean") is None  # telemetry not collected
+    # with no telemetry the instability rule cannot fire -> degrades, never crashes
+    assert repo.list_hypotheses_for_trial(trial.trial_id)[0].category != FailureCategory.likely_instability
+
+
+def test_ingestion_auto_plans_counterfactual_for_plannable_category(make_env):
+    settings, repo = make_env(ollama_enabled=False)  # counterfactual_planner_enabled default true
+    trial = record_rejected_trial(
+        {"git_commit": "x", "status": "discard", "baseline_metric": 1.0, "changed_components": ["optimizer"],
+         "hyperparameters": {"MATRIX_LR": 0.08}, "changed_hyperparameters": {"MATRIX_LR": 0.08}},
+        {"post_change_metric": 1.15},
+        "d",
+        {"telemetry": {"gradient_norm_mean": 1.0, "gradient_norm_std": 3.0, "val_metric": 1.15}, "finished": True},
+        settings=settings, repository=repo,
+    )
+    hyp = repo.list_hypotheses_for_trial(trial.trial_id)[0]
+    plans = repo.list_plans_for_hypothesis(hyp.hypothesis_id)
+    assert plans and plans[0].primary_intervention_variable == "MATRIX_LR"
+
+
 # --- offline batch backfill (best-effort) ---------------------------------------
 def test_ingest_results_tsv_backfills_non_keep_rows(make_env, tmp_path):
     settings, repo = make_env(ollama_enabled=False)

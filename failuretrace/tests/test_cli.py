@@ -62,6 +62,29 @@ def test_cli_ingest_then_reports(tmp_path):
     assert (tmp_path / "reports" / "failure_map.md").exists()
 
 
+def test_cli_gate_and_guidance(tmp_path):
+    assert _run(tmp_path, "init").returncode == 0
+    # ingest three same-family instability trials on distinct commits -> a replication group
+    for i in range(3):
+        trial_file = tmp_path / f"t{i}.json"
+        trial_file.write_text(json.dumps({
+            **_TRIAL_JSON, "git_commit": f"commit{i}", "seed": 40 + i,
+        }), encoding="utf-8")
+        assert _run(tmp_path, "ingest", str(trial_file)).returncode == 0
+
+    gate = _run(tmp_path, "gate")
+    assert gate.returncode == 0, gate.stderr
+    assert "promoted 1 hypothesis group" in gate.stdout
+
+    # gate is idempotent on a second run
+    gate2 = _run(tmp_path, "gate")
+    assert "no hypothesis group" in gate2.stdout
+
+    guidance = _run(tmp_path, "guidance", "--category", "likely_instability", "--component", "optimizer")
+    assert guidance.returncode == 0, guidance.stderr
+    assert "hard constraint" in guidance.stdout  # C2 evidence -> hard constraint
+
+
 def test_cli_report_trial(tmp_path):
     assert _run(tmp_path, "init").returncode == 0
     trial_file = tmp_path / "trial.json"

@@ -61,6 +61,7 @@ from .planner import (
     evaluate_counterfactual,
     evaluate_replication,
     plan_counterfactual,
+    promote_replications,
 )
 from .integration import (
     guidance_for,
@@ -137,6 +138,7 @@ __all__ = [
     "evaluate_replication",
     "evaluate_counterfactual",
     "evaluate_c4",
+    "promote_replications",
     # integration (autoresearch-facing public API)
     "record_rejected_trial",
     "record_from_run",

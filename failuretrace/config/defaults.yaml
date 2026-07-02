@@ -4,11 +4,18 @@
 
 # --- Feature flags ---
 enabled: true
-ollama_enabled: true    # Ollama-based analysis; transparently falls back if unavailable
-collect_telemetry: true
+# NOTE: spec §1.1 defaults ollama_enabled to false; this project deliberately ships it
+# ON (local Ollama is the only permitted, and optional, LLM). It is strictly additive and
+# transparently falls back to the deterministic path on any failure, and the LLM can never
+# raise causal level, force a hard constraint, or overwrite rubric confidence. Trade-off:
+# with Ollama installed, `ingest`/`record` really call localhost (add latency); an
+# unreachable/ hung endpoint costs up to (max_retries+1) x timeout_seconds before fallback.
+# Pass --no-ollama (or set false) for a fully deterministic/offline run.
+ollama_enabled: true
+collect_telemetry: true        # false -> trials are ingested without normalized telemetry
 store_raw_json: true
-counterfactual_planner_enabled: true
-replication_gate_enabled: true
+counterfactual_planner_enabled: true   # auto-plan a counterfactual for plannable categories at ingestion
+replication_gate_enabled: true         # allow `failuretrace gate` to persist replication promotions
 
 # --- Paths (development defaults; overridable) ---
 paths:

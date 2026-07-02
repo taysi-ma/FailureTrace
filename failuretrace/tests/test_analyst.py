@@ -127,6 +127,10 @@ def test_llm_success_enriches_hypothesis(make_env, make_trial):
     assert hyp.source == HypothesisSource.local_llm
     assert "LLM: gradient variance elevated" in hyp.observations
     assert hyp.category == classification.category  # category stays deterministic
+    # the deterministic rubric confidence is authoritative; the LLM's stated 0.6 is only
+    # recorded for provenance in llm_confidence, never in hypothesis_confidence (Invariant 5)
+    assert hyp.hypothesis_confidence == classification.confidence
+    assert hyp.llm_confidence == 0.6
 
 
 # --- T7: single-trial hypothesis capped at C1 even if the LLM returns C3 ---------

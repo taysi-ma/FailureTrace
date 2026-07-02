@@ -62,6 +62,10 @@ class Repository:
         """How many trials already reference ``git_commit`` (for idempotent ingestion)."""
         return self.sqlite.count_trials_for_commit(git_commit)
 
+    def trial_id_for_commit(self, git_commit: str) -> str | None:
+        """The earliest recorded trial id for ``git_commit`` (for parent-lineage linking)."""
+        return self.sqlite.trial_id_for_commit(git_commit)
+
     # --- hypotheses -------------------------------------------------------------
     def save_hypothesis(
         self,
@@ -207,6 +211,9 @@ class Repository:
     def save_link(self, rec: LinkRecord) -> LinkRecord:
         self.sqlite.insert_link(rec)
         return rec
+
+    def list_links_for_hypothesis(self, hypothesis_id: str) -> list[LinkRecord]:
+        return self.sqlite.list_links_for_hypothesis(hypothesis_id)
 
     # --- counterfactual plans ---------------------------------------------------
     def save_plan(self, rec: CounterfactualPlan) -> CounterfactualPlan:

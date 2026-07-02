@@ -148,6 +148,10 @@ class FailureHypothesis(BaseModel):
 
     hypothesis_confidence: float = Field(ge=0.0, le=1.0)
     evidence_quality: float = Field(ge=0.0, le=1.0)
+    # The LLM's *stated* belief, recorded for provenance only. It never replaces the
+    # deterministic rubric value in ``hypothesis_confidence`` (Cross-Cutting Invariant 5:
+    # confidence comes from the rubric, never ad-hoc). ``None`` on rule-based hypotheses.
+    llm_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     suggested_intervention: Intervention
     proposed_counterfactual_trial: CounterfactualPlanRef

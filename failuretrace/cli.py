@@ -3,6 +3,8 @@
     python -m failuretrace init
     python -m failuretrace ingest <trial.json>     # synthetic/demo ingestion
     python -m failuretrace record --commit ... --status ... --run-log run.log --repo .
+    python -m failuretrace gate                     # promote replicated C1 hypotheses to C2
+    python -m failuretrace guidance --category ... --component ...
     python -m failuretrace report summary|failures|map
     python -m failuretrace report trial <trial_id>
 
@@ -126,6 +128,53 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gate(args: argparse.Namespace) -> int:
+    from .planner import promote_replications
+
+    settings = _build_settings(args)
+    if not settings.replication_gate_enabled:
+        print("replication gate is disabled (replication_gate_enabled: false)")
+        return 0
+    initialize_database(settings)
+    repository = Repository(settings)
+    promotions = promote_replications(repository, settings)
+    if not promotions:
+        print("replication gate: no hypothesis group met the promotion threshold")
+        return 0
+    print(f"replication gate: promoted {len(promotions)} hypothesis group(s) C1 -> C2")
+    for p in promotions:
+        print(f"  - {p.hypothesis_id} (group {p.replication_group_id}, "
+              f"{len(p.supporting_trial_ids)} supporting trials)")
+    return 0
+
+
+def _cmd_guidance(args: argparse.Namespace) -> int:
+    from .core.enums import FailureCategory, MetricDirection
+    from .evidence import InterventionContext, summarize_guidance
+    from .integration.optimizer_adapter import guidance_for
+
+    settings = _build_settings(args)
+    initialize_database(settings)
+    repository = Repository(settings)
+
+    category = FailureCategory(args.category) if args.category else None
+    components = args.component or []
+    ic = InterventionContext(
+        category=category,
+        changed_components=list(components),
+        metric_direction=settings.metric.direction,
+    )
+    guidance = guidance_for(ic, settings=settings, repository=repository, top_k=args.top_k)
+    print(f"search guidance: {summarize_guidance(guidance)}")
+    for hc in guidance.hard_constraints:
+        print(f"  [HARD] {hc.get('category', '?')}: {hc.get('reason', '')}")
+    for sp in guidance.soft_penalties:
+        print(f"  [soft] {sp.get('category', '?')}: {sp.get('reason', '')}")
+    for w in guidance.warnings:
+        print(f"  [warn] {w}")
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     from .reporting import write_failure_map, write_summary, write_trial_report
 
@@ -185,6 +234,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("kind", choices=["summary", "failures", "map", "trial"])
     p_report.add_argument("trial_id", nargs="?", default=None)
     p_report.set_defaults(func=_cmd_report)
+
+    sub.add_parser(
+        "gate", help="run the replication gate: promote replicated C1 hypotheses to C2"
+    ).set_defaults(func=_cmd_gate)
+
+    p_guidance = sub.add_parser("guidance", help="print search guidance for an intervention context")
+    p_guidance.add_argument("--category", default=None, help="failure category to match (e.g. likely_instability)")
+    p_guidance.add_argument("--component", action="append", default=None, help="changed component (repeatable)")
+    p_guidance.add_argument("--top-k", type=int, default=5, dest="top_k")
+    p_guidance.set_defaults(func=_cmd_guidance)
 
     return parser
 

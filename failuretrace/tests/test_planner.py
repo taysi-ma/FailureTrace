@@ -15,8 +15,9 @@ from failuretrace import (
     evaluate_counterfactual,
     evaluate_replication,
     plan_counterfactual,
+    promote_replications,
 )
-from failuretrace.core.enums import CausalSupportLevel, MetricDirection
+from failuretrace.core.enums import CausalSupportLevel, LinkType, MetricDirection
 from failuretrace.planner.interventions import DEFAULT_KNOWN_VARIABLES
 from failuretrace.tests.fixtures.scenarios import (
     inconclusive_noise,
@@ -71,6 +72,17 @@ def _promote_c3(repo, settings, make_trial, hyp):
     res = CounterfactualResult(trial_id="cf", baseline_metric=1.0, post_change_metric=0.9,
                                metric_direction=MetricDirection.minimize)
     repo.save_promotion(evaluate_counterfactual(hyp.hypothesis_id, [res], settings=settings, repository=repo))
+
+
+def _persist_instability_group(repo, settings, make_trial, *, seeds, commits):
+    """Persist several C1 instability hypotheses sharing one intervention fingerprint."""
+    for i, (seed, commit) in enumerate(zip(seeds, commits)):
+        t = make_trial(trial_id=f"grp{i}", seed=seed, git_commit=commit,
+                       changed_components=["optimizer"], hyperparameters={"MATRIX_LR": 0.08},
+                       baseline_metric=1.0, post_change_metric=1.15)
+        repo.save_trial(t)
+        repo.save_hypothesis(build_fallback(classify(instability(), settings), instability(),
+                                            trial_id=t.trial_id, settings=settings))
 
 
 # --- T10: planner holds every unrelated variable constant ------------------------
@@ -203,6 +215,36 @@ def test_c4_requires_two_distinct_contexts(repo, settings, make_trial):
     promotion = evaluate_c4(hyp.hypothesis_id, distinct, settings=settings, repository=repo)
     assert promotion is not None
     assert promotion.to_level == CausalSupportLevel.C4_robust_rule
+
+
+# --- gate driver (promote_replications) -----------------------------------------
+def test_promote_replications_promotes_group_and_writes_links(repo, settings, make_trial):
+    _persist_instability_group(repo, settings, make_trial, seeds=(1, 2, 3),
+                               commits=["c1", "c2", "c3"])
+    promotions = promote_replications(repo, settings)
+    assert len(promotions) == 1
+    promo = promotions[0]
+    assert promo.to_level == CausalSupportLevel.C2_replicated_effect
+    assert repo.effective_causal_level(promo.hypothesis_id) == CausalSupportLevel.C2_replicated_effect
+    # explicit append-only replication links were written for the supporting trials
+    links = repo.list_links_for_hypothesis(promo.hypothesis_id)
+    assert links and all(link.link_type == LinkType.replication for link in links)
+    # idempotent: the group is already represented, so a second run promotes nothing
+    assert promote_replications(repo, settings) == []
+
+
+def test_replication_key_uses_seed_commit_units_not_just_seed(repo, settings, make_trial):
+    # autoresearch pins seed 42; three distinct COMMITS at the same seed must still replicate
+    _persist_instability_group(repo, settings, make_trial, seeds=(42, 42, 42),
+                               commits=["a", "b", "c"])
+    assert len(promote_replications(repo, settings)) == 1
+
+
+def test_deterministic_reruns_of_one_commit_do_not_replicate(repo, settings, make_trial):
+    # same seed AND same commit => one replication unit => never enough to promote
+    _persist_instability_group(repo, settings, make_trial, seeds=(42, 42, 42),
+                               commits=["same", "same", "same"])
+    assert promote_replications(repo, settings) == []
 
 
 # --- promotion persists and raises the effective level (not the record) ----------

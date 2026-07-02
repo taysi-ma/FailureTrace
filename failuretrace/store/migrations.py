@@ -169,11 +169,27 @@ ALTER TABLE links_v3 RENAME TO links;
 CREATE INDEX IF NOT EXISTS idx_links_hyp ON links(hypothesis_id);
 """
 
+# v4: make append-only immutability *physical*. Records are inserted once and never
+# updated or deleted; these BEFORE UPDATE/DELETE triggers raise, so a stray raw-SQL
+# mutation is rejected by the database, not merely by API discipline. (INSERT is
+# unaffected — promotions and links are still plain inserts.)
+_IMMUTABLE_TABLES = ("trials", "hypotheses", "promotions", "plans", "links")
+_DDL_V4 = "\n".join(
+    f"""
+CREATE TRIGGER IF NOT EXISTS trg_{t}_no_update BEFORE UPDATE ON {t}
+BEGIN SELECT RAISE(ABORT, '{t} are append-only / immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_{t}_no_delete BEFORE DELETE ON {t}
+BEGIN SELECT RAISE(ABORT, '{t} are append-only / immutable'); END;
+"""
+    for t in _IMMUTABLE_TABLES
+)
+
 # (version, ddl) applied in ascending order. Append new steps; never edit shipped ones.
 SCHEMA_STEPS: list[tuple[int, str]] = [
     (1, _DDL_V1),
     (2, _DDL_V2),
     (3, _DDL_V3),
+    (4, _DDL_V4),
 ]
 
 

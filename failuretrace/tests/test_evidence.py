@@ -136,3 +136,20 @@ def test_summaries_are_compact(repo, settings, make_trial):
     summary = summarize_failures(retrieved)
     assert "likely_instability" in summary
     assert summarize_failures([]) == "No relevant prior failures."
+
+
+def test_summaries_show_effective_level_after_promotion(repo, settings, make_trial):
+    _, hyp = _seed(repo, settings, make_trial, instability(), changed_components=["optimizer"])
+    repo.save_trial(make_trial(trial_id="a", seed=1))
+    repo.save_trial(make_trial(trial_id="b", seed=2))
+    repo.save_promotion(PromotionRecord(
+        promotion_id=new_promotion_id(), hypothesis_id=hyp.hypothesis_id,
+        from_level=CausalSupportLevel.C1_plausible_hypothesis,
+        to_level=CausalSupportLevel.C2_replicated_effect,
+        supporting_trial_ids=["a", "b"], rationale="two replications",
+        settings_hash=settings.settings_hash(),
+    ))
+    ic = InterventionContext(category=FailureCategory.likely_instability, changed_components=["optimizer"])
+    retrieved = retrieve_relevant_failures(ic, repository=repo, settings=settings)
+    # the summary reflects the *effective* (post-promotion) level, not the frozen original
+    assert "C2_replicated_effect" in summarize_failures(retrieved)

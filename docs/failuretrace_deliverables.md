@@ -5,9 +5,11 @@ Turns rejected/crashed ML experiments into structured, uncertainty-aware failure
 hypotheses, stores them as reusable negative evidence, and uses them to guide future
 experimentation — **without ever claiming causality from a single trial**.
 
-Status: Phases 0–6 complete, plus a post-audit P0 hardening pass (evidence-checked
-promotion gate, idempotent ingestion, database foreign keys). Test suite:
-**142 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
+Status: Phases 0–6 complete, plus post-audit hardening — **P0** (evidence-checked
+promotion gate, idempotent ingestion, database foreign keys) and **P1** (wired governance
+loop with `gate`/`guidance` CLI + auto-planning, commit-based replication key, explicit
+replication links, physical immutability triggers, LLM-confidence provenance). Test suite:
+**151 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
 
 ---
 
@@ -94,9 +96,11 @@ Run the end-to-end demo (Ollama disabled throughout):
 python -m failuretrace demo                 # or: python demo/run_demo.py
 ```
 
-Ingest / report / record:
+Ingest / gate / guidance / report / record:
 ```
 python -m failuretrace ingest trial.json
+python -m failuretrace gate                  # promote replicated C1 hypotheses to C2 (writes links)
+python -m failuretrace guidance --category likely_instability --component optimizer
 python -m failuretrace report summary       # also: failures | map | trial <trial_id>
 python -m failuretrace record --commit <hash> --status <discard|crash> \
     --run-log run.log --repo . --branch autoresearch/<tag> --description "<desc>"
@@ -164,10 +168,13 @@ write time by the repository. Inconclusive evidence yields context/soft warnings
 - **Sparse telemetry**: autoresearch emits only the summary block, a `FAIL` marker, and
   tracebacks. Gradient/loss-spike/LR-history metrics are absent, so those classifier rules
   degrade gracefully (never crash) rather than firing.
-- **Single-seed by default** (`train.py` pins seed 42): C1→C2 replication comes more
-  naturally from repeated independent runs on separate branches than from seed sweeps.
+- **Single-seed by default** (`train.py` pins seed 42): C1→C2 replication is driven by
+  distinct **(seed, commit)** units, so independent runs on different commits replicate even
+  at a fixed seed; deterministic re-runs of one commit correctly do not. The live adapter
+  records `config_hash` + `parent_trial_id` so a group's lineage is reconstructable.
 - **LLM is optional and additive**: with Ollama absent/failing, the deterministic fallback
-  fully drives the pipeline; the LLM can never raise causal level or force a hard constraint.
+  fully drives the pipeline; the LLM can never raise causal level, force a hard constraint,
+  or overwrite the rubric confidence — its stated belief is recorded only in `llm_confidence`.
 - **Reports**: matplotlib is optional — PNGs are produced only when it is installed; the
   markdown artifacts are always produced.
 - `prepare.py`/`train.py` require an NVIDIA GPU + dataset to execute and were never run

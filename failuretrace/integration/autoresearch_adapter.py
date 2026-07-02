@@ -24,6 +24,8 @@ and :func:`record_rejected_trial` returns ``None`` without any DB/JSON write.
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import logging
 import re
 import subprocess
@@ -154,6 +156,11 @@ def record_rejected_trial(
         exc_msg = rd.get("exception_message")
         finished = rd.get("finished", exc_type is None)
 
+    # collect_telemetry=false -> ingest the trial without normalized telemetry (crash /
+    # exception facts are kept; metric-derived classifier rules simply degrade gracefully).
+    if not settings.collect_telemetry:
+        telemetry = normalize({})
+
     status = _resolve_status(ec.get("status"), exc_type, exc_msg)
 
     baseline = ec.get("baseline_metric")
@@ -211,12 +218,21 @@ def record_rejected_trial(
         requires_matched_seeds=bool(ec.get("requires_matched_seeds", False)),
     )
     classification = classify(ctx, settings)
-    analyze(
+    hypothesis = analyze(
         classification, ctx,
         trial_id=trial.trial_id, settings=settings, repository=repository,
         code_diff_summary=_summarize_diff(diff),
         changed_components=trial.changed_components,
     )
+    # Auto-plan a controlled counterfactual for plannable categories at ingestion, so the
+    # C2->C3 gate (which requires a persisted plan) has something to validate later. The
+    # planner returns plans only — nothing is executed.
+    if settings.counterfactual_planner_enabled:
+        from ..planner import plan_counterfactual
+
+        plan = plan_counterfactual(hypothesis, settings=settings)
+        if plan is not None:
+            repository.save_plan(plan)
     logger.info("recorded trial %s (status=%s, category=%s)", trial.trial_id, status.value, classification.category.value)
     return trial
 
@@ -240,6 +256,14 @@ _TUNABLE_NAMES = frozenset({
     "UNEMBEDDING_LR", "MATRIX_LR", "SCALAR_LR", "WEIGHT_DECAY", "ADAM_BETAS",
     "WARMUP_RATIO", "WARMDOWN_RATIO", "FINAL_LR_FRAC", "DEPTH", "DEVICE_BATCH_SIZE",
 })
+
+
+def _config_hash(hyperparameters: Mapping[str, Any] | None) -> str | None:
+    """Stable 16-hex identity for a tunable configuration (None when empty)."""
+    if not hyperparameters:
+        return None
+    canonical = json.dumps(dict(hyperparameters), sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def _parse_tunables(source: str) -> dict[str, Any]:
@@ -297,8 +321,21 @@ def record_from_run(
         source = _git(repo_path, "show", f"{commit}:train.py")
         hyperparameters = _parse_tunables(source) if source else {}
 
+    # A stable config identity from the tunable block, so trials sharing an identical
+    # configuration are recognizably the same config even across commits/seeds.
+    config_hash = _config_hash(hyperparameters)
+    # Parent lineage: link to the baseline trial if it was already recorded (autoresearch
+    # pins seed 42, so replication is driven by commit lineage, not seed diversity — #6).
+    parent_trial_id = (
+        repository.trial_id_for_commit(baseline_commit)
+        if (repository is not None and baseline_commit)
+        else None
+    )
+
     experiment_context = {
         "git_commit": commit,
+        "parent_trial_id": parent_trial_id,
+        "config_hash": config_hash,
         "seed": seed,
         "status": status,
         "description": description,

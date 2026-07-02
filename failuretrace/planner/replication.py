@@ -23,13 +23,14 @@ No Bayesian causal estimation in the MVP.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..classifier.thresholds import load_thresholds
-from ..core.enums import CausalSupportLevel, MetricDirection
-from ..core.ids import new_promotion_id
-from ..core.models import PromotionRecord, TrialRecord
+from ..core.enums import CausalSupportLevel, LinkType, MetricDirection
+from ..core.ids import new_link_id, new_promotion_id, new_replication_group_id
+from ..core.models import LinkRecord, PromotionRecord, TrialRecord
 from ..core.settings import Settings, improvement
 from ..store.repository import Repository
 
@@ -78,6 +79,16 @@ def _improvement_sign(trial: TrialRecord, direction: MetricDirection) -> int | N
     return 0
 
 
+def _replication_unit(trial: TrialRecord, seed: int | None) -> tuple:
+    """A distinct replication unit: the (seed, git_commit) pair, so independent commits
+    count separately (even under a pinned seed) while identical re-runs collapse to one.
+    Falls back to the trial id only when neither seed nor commit is known."""
+    resolved_seed = seed if seed is not None else trial.seed
+    if resolved_seed is not None or trial.git_commit:
+        return (resolved_seed, trial.git_commit)
+    return ("trial", trial.trial_id)
+
+
 def evaluate_replication(
     hypothesis_id: str,
     evidence: list[ReplicationEvidence],
@@ -104,7 +115,8 @@ def evaluate_replication(
     source_fp = _intervention_fingerprint(source) if source is not None else frozenset()
     source_sign = _improvement_sign(source, direction) if source is not None else None
 
-    qualifying: list[tuple[str, int | None]] = []
+    qualifying: list[str] = []
+    units: set[tuple] = set()
     for ev in evidence:
         trial = repository.get_trial(ev.trial_id)
         if trial is None:
@@ -120,10 +132,13 @@ def evaluate_replication(
                 continue
             if abs(improvement(trial.baseline_metric, trial.post_change_metric, direction)) < noise:
                 continue
-        qualifying.append((trial.trial_id, ev.seed if ev.seed is not None else trial.seed))
+        qualifying.append(trial.trial_id)
+        units.add(_replication_unit(trial, ev.seed))
 
-    distinct_seeds = {s for _, s in qualifying if s is not None}
-    count = len(distinct_seeds) if distinct_seeds else len({tid for tid, _ in qualifying})
+    # A replication *unit* is a distinct (seed, commit) pair: independent runs on different
+    # commits count separately even under a pinned seed (autoresearch fixes seed 42), while
+    # deterministic re-runs of the same commit+seed collapse to one and cannot inflate count.
+    count = len(units)
     if count < thresholds.replication_minimum_trials:
         return None
 
@@ -133,13 +148,68 @@ def evaluate_replication(
         from_level=_C1,
         to_level=_C2,
         replication_group_id=replication_group_id,
-        supporting_trial_ids=[tid for tid, _ in qualifying],
+        supporting_trial_ids=qualifying,
         rationale=(
-            f"same intervention family replicated across {count} distinct-seed/controlled "
-            f"trials (>= {thresholds.replication_minimum_trials}), consistent direction"
+            f"same intervention family replicated across {count} distinct (seed, commit) "
+            f"units (>= {thresholds.replication_minimum_trials}), consistent direction"
         ),
         settings_hash=settings.settings_hash(),
     )
+
+
+def promote_replications(repository: Repository, settings: Settings) -> list[PromotionRecord]:
+    """Scan persisted C1 hypotheses, group them by (category, intervention fingerprint),
+    and promote each group that clears the replication gate to C2 — persisting the
+    promotion and an append-only replication :class:`LinkRecord` per supporting trial.
+
+    This is the deterministic driver behind ``failuretrace gate``. It is the only place a
+    replication promotion is minted in the normal flow; ``evaluate_replication`` and the
+    repository write-gate still enforce the evidence requirements.
+    """
+    groups: dict[tuple, list[tuple]] = defaultdict(list)
+    for hyp in repository.list_hypotheses():
+        trial = repository.get_trial(hyp.trial_id)
+        if trial is None:
+            continue
+        level = repository.effective_causal_level(hyp.hypothesis_id)
+        key = (hyp.category, _intervention_fingerprint(trial))
+        groups[key].append((hyp, trial, level))
+
+    minimum = load_thresholds(settings).replication_minimum_trials
+    promotions: list[PromotionRecord] = []
+    for members in groups.values():
+        # Idempotent: a group already represented by a replication promotion is skipped,
+        # so re-running the gate does not keep promoting the C1 stragglers of one effect.
+        if any(level is not None and level.at_least(_C2) for _, _, level in members):
+            continue
+        c1_members = [(h, t) for h, t, level in members if level == _C1]
+        if len(c1_members) < minimum:
+            continue
+        representative = c1_members[0][0]
+        group_id = new_replication_group_id()
+        evidence = [ReplicationEvidence(trial_id=t.trial_id, seed=t.seed) for _, t in c1_members]
+        promotion = evaluate_replication(
+            representative.hypothesis_id, evidence,
+            settings=settings, repository=repository, replication_group_id=group_id,
+        )
+        if promotion is None:
+            continue
+        repository.save_promotion(promotion)
+        # Explicit, append-only replication links (spec §1.3): each supporting trial ->
+        # the promoted hypothesis, tagged with the replication group.
+        for trial_id in promotion.supporting_trial_ids:
+            repository.save_link(LinkRecord(
+                link_id=new_link_id(),
+                link_type=LinkType.replication,
+                hypothesis_id=representative.hypothesis_id,
+                trial_id=trial_id,
+                replication_group_id=group_id,
+                settings_hash=settings.settings_hash(),
+                note="replication support for C1->C2 promotion",
+            ))
+        promotions.append(promotion)
+    logger.info("replication gate promoted %d hypothesis group(s) to C2", len(promotions))
+    return promotions
 
 
 def evaluate_counterfactual(
