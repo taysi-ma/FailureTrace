@@ -50,6 +50,29 @@ def repo(settings):
 
 
 @pytest.fixture
+def make_env(tmp_path):
+    """Build an isolated (settings, repository) with arbitrary config overrides.
+
+    Deep-merges overrides onto defaults, so e.g. ``make_env(ollama_enabled=False)`` or
+    ``make_env(thresholds={"resource_vram_limit_gb": 40})`` work without replacing the
+    rest of the config.
+    """
+    def _factory(**overrides):
+        base = {
+            "paths": {
+                "data_dir": str(tmp_path / "data"),
+                "reports_dir": str(tmp_path / "reports"),
+            }
+        }
+        base.update(overrides)
+        env_settings = load_settings(overrides=base, env={})
+        initialize_database(env_settings)
+        return env_settings, Repository(env_settings)
+
+    return _factory
+
+
+@pytest.fixture
 def make_trial():
     def _factory(**over) -> TrialRecord:
         base = dict(

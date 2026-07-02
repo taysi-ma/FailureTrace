@@ -59,10 +59,19 @@ def test_ac3_deterministic_classifier_returns_explainable_category(settings):
     assert result.observations and result.triggered_rules  # explainable
 
 
-# --- AC4 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 3")
-def test_ac4_fallback_hypothesis_persisted_when_ollama_disabled():
-    ...
+# --- AC4 (active, phase 3) ------------------------------------------------------
+def test_ac4_fallback_hypothesis_persisted_when_ollama_disabled(make_env):
+    from failuretrace import classify
+    from failuretrace.analyst import analyze
+    from failuretrace.core.enums import HypothesisSource
+    from failuretrace.tests.fixtures.scenarios import instability
+
+    settings, repo = make_env(ollama_enabled=False)
+    ctx = instability()
+    classification = classify(ctx, settings)
+    hyp = analyze(classification, ctx, trial_id="ac4", settings=settings, repository=repo)
+    assert hyp.source == HypothesisSource.rule_based
+    assert repo.get_hypothesis(hyp.hypothesis_id) is not None
 
 
 # --- AC5 (active) ---------------------------------------------------------------

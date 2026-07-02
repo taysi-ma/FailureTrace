@@ -38,6 +38,7 @@ from .store.migrations import initialize_database
 from .store.repository import Repository
 from .telemetry import TelemetryRecord, normalize, parse_run_log, telemetry_from_run_log
 from .classifier import ClassificationContext, FailureClassification, classify
+from .analyst import OllamaClient, OllamaError, analyze, build_fallback
 
 __version__ = "0.1.0"
 
@@ -84,4 +85,9 @@ __all__ = [
     "ClassificationContext",
     "FailureClassification",
     "classify",
+    # analyst
+    "analyze",
+    "build_fallback",
+    "OllamaClient",
+    "OllamaError",
 ]

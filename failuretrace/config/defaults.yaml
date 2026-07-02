@@ -4,7 +4,7 @@
 
 # --- Feature flags ---
 enabled: true
-ollama_enabled: false
+ollama_enabled: true    # Ollama-based analysis; transparently falls back if unavailable
 collect_telemetry: true
 store_raw_json: true
 counterfactual_planner_enabled: true
@@ -29,6 +29,7 @@ thresholds:
   inconclusive_noise_floor: 0.001
   replication_minimum_trials: 2
   counterfactual_minimum_support: 1
+  resource_vram_limit_gb: null   # objective hard-constraint limit; null = no limit (Phase 3)
 
 # --- Confidence rubric (Phase 2). tier value x evidence completeness; see classifier docs. ---
 confidence:
@@ -36,3 +37,11 @@ confidence:
   strong_heuristic: 0.7
   weak_heuristic: 0.5
   default: 0.3
+
+# --- Local Ollama endpoint (Phase 3). Optional; only used when ollama_enabled. ---
+ollama:
+  base_url: http://localhost:11434
+  model: llama3.1            # user-overridable
+  timeout_seconds: 30
+  max_retries: 1
+  format: json               # request structured JSON output
