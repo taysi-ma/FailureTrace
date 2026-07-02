@@ -237,3 +237,37 @@ class LinkRecord(BaseModel):
     timestamp: datetime = Field(default_factory=_utcnow)
     settings_hash: str | None = None
     note: str | None = None
+
+
+class CounterfactualPlan(BaseModel):
+    """A deterministic, controlled validation experiment (append-only; never executed).
+
+    By default exactly one primary variable is intervened on. A coupled stabilization
+    variable is permitted ONLY when the hypothesis explicitly concerns the interaction
+    of the two — in which case ``interaction_rationale`` must state why both are
+    necessary and which interaction is tested (the validator rejects a coupled plan
+    without it). Expected outcomes are stated direction-aware (via ``improvement()``).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    plan_id: str
+    hypothesis_id: str
+    primary_intervention_variable: str
+    optional_coupled_stabilization_variable: str | None = None
+    control_variables: list[str] = Field(default_factory=list)
+    treatment_variables: list[str] = Field(default_factory=list)
+    held_constant_variables: list[str] = Field(default_factory=list)
+    expected_outcome_if_hypothesis_true: str
+    expected_outcome_if_hypothesis_false: str
+    interaction_rationale: str | None = None
+    settings_hash: str
+
+    @model_validator(mode="after")
+    def _coupled_requires_rationale(self) -> "CounterfactualPlan":
+        if self.optional_coupled_stabilization_variable is not None:
+            if not (self.interaction_rationale and self.interaction_rationale.strip()):
+                raise ValueError(
+                    "a coupled plan (two variables) requires a non-empty interaction_rationale"
+                )
+        return self

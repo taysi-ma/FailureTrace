@@ -12,7 +12,13 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from ..core.models import FailureHypothesis, LinkRecord, PromotionRecord, TrialRecord
+from ..core.models import (
+    CounterfactualPlan,
+    FailureHypothesis,
+    LinkRecord,
+    PromotionRecord,
+    TrialRecord,
+)
 from ..core.settings import Settings
 from .errors import DuplicateRecordError
 
@@ -181,3 +187,30 @@ class SqliteStore:
             (hypothesis_id,),
         )
         return [LinkRecord.model_validate_json(r["data"]) for r in rows]
+
+    # --- counterfactual plans ---------------------------------------------------
+    def insert_plan(self, rec: CounterfactualPlan) -> None:
+        self._insert(
+            "INSERT INTO plans (plan_id, hypothesis_id, primary_intervention_variable, "
+            "coupled_variable, settings_hash, data) VALUES (?,?,?,?,?,?)",
+            (
+                rec.plan_id,
+                rec.hypothesis_id,
+                rec.primary_intervention_variable,
+                rec.optional_coupled_stabilization_variable,
+                rec.settings_hash,
+                rec.model_dump_json(),
+            ),
+            what=f"plan {rec.plan_id}",
+        )
+
+    def get_plan(self, plan_id: str) -> CounterfactualPlan | None:
+        row = self._fetchone("SELECT data FROM plans WHERE plan_id=?", (plan_id,))
+        return CounterfactualPlan.model_validate_json(row["data"]) if row else None
+
+    def list_plans_for_hypothesis(self, hypothesis_id: str) -> list[CounterfactualPlan]:
+        rows = self._fetchall(
+            "SELECT data FROM plans WHERE hypothesis_id=? ORDER BY plan_id",
+            (hypothesis_id,),
+        )
+        return [CounterfactualPlan.model_validate_json(r["data"]) for r in rows]

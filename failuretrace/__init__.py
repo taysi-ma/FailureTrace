@@ -25,6 +25,7 @@ from .core.ids import (
     new_trial_id,
 )
 from .core.models import (
+    CounterfactualPlan,
     CounterfactualPlanRef,
     FailureHypothesis,
     Intervention,
@@ -39,6 +40,22 @@ from .store.repository import Repository
 from .telemetry import TelemetryRecord, normalize, parse_run_log, telemetry_from_run_log
 from .classifier import ClassificationContext, FailureClassification, classify
 from .analyst import OllamaClient, OllamaError, analyze, build_fallback
+from .evidence import (
+    InterventionContext,
+    RetrievedFailure,
+    SearchGuidance,
+    build_guidance,
+    retrieve_relevant_failures,
+    summarize_failures,
+)
+from .planner import (
+    CounterfactualResult,
+    ReplicationEvidence,
+    evaluate_c4,
+    evaluate_counterfactual,
+    evaluate_replication,
+    plan_counterfactual,
+)
 
 __version__ = "0.1.0"
 
@@ -56,6 +73,7 @@ __all__ = [
     "FailureHypothesis",
     "Intervention",
     "CounterfactualPlanRef",
+    "CounterfactualPlan",
     "PromotionRecord",
     "LinkRecord",
     # settings + helper
@@ -90,4 +108,18 @@ __all__ = [
     "build_fallback",
     "OllamaClient",
     "OllamaError",
+    # evidence
+    "InterventionContext",
+    "RetrievedFailure",
+    "retrieve_relevant_failures",
+    "SearchGuidance",
+    "build_guidance",
+    "summarize_failures",
+    # planner
+    "plan_counterfactual",
+    "ReplicationEvidence",
+    "CounterfactualResult",
+    "evaluate_replication",
+    "evaluate_counterfactual",
+    "evaluate_c4",
 ]

@@ -21,6 +21,7 @@ class Thresholds(BaseModel):
     inconclusive_noise_floor: float
     replication_minimum_trials: int
     counterfactual_minimum_support: int
+    c4_minimum_counterfactuals: int = 2
     resource_vram_limit_gb: float | None = None
 
 

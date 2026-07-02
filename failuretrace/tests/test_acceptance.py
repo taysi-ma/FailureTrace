@@ -83,28 +83,67 @@ def test_ac5_trial_written_to_both_sqlite_and_json(repo, make_trial):
     assert repo.json.read_trial(trial.trial_id) == trial
 
 
-# --- AC6 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 4")
-def test_ac6_relevant_prior_failures_retrieved():
-    ...
+def _seed_instability(repo, settings, make_trial):
+    from failuretrace import build_fallback, classify
+    from failuretrace.tests.fixtures.scenarios import instability
+
+    trial = make_trial(changed_components=["optimizer"], hyperparameters={"MATRIX_LR": 0.08})
+    repo.save_trial(trial)
+    classification = classify(instability(), settings)
+    hyp = build_fallback(classification, instability(), trial_id=trial.trial_id, settings=settings)
+    repo.save_hypothesis(hyp)
+    return hyp
 
 
-# --- AC7 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 4")
-def test_ac7_retrieval_includes_deterministic_score_explanations():
-    ...
+# --- AC6 (active, phase 4) ------------------------------------------------------
+def test_ac6_relevant_prior_failures_retrieved(repo, settings, make_trial):
+    from failuretrace import InterventionContext, retrieve_relevant_failures
+    from failuretrace.core.enums import FailureCategory
+
+    _seed_instability(repo, settings, make_trial)
+    ic = InterventionContext(
+        category=FailureCategory.likely_instability,
+        changed_components=["optimizer"],
+        changed_hyperparameters={"MATRIX_LR": 0.08},
+    )
+    results = retrieve_relevant_failures(ic, repository=repo, settings=settings)
+    assert results
+    assert results[0].hypothesis.category == FailureCategory.likely_instability
+    assert results[0].relevance_score > 0
 
 
-# --- AC8 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 4")
-def test_ac8_counterfactual_plan_generated_without_execution():
-    ...
+# --- AC7 (active, phase 4) ------------------------------------------------------
+def test_ac7_retrieval_includes_deterministic_score_explanations(repo, settings, make_trial):
+    from failuretrace import InterventionContext, retrieve_relevant_failures
+    from failuretrace.core.enums import FailureCategory
+
+    _seed_instability(repo, settings, make_trial)
+    ic = InterventionContext(category=FailureCategory.likely_instability, changed_components=["optimizer"])
+    results = retrieve_relevant_failures(ic, repository=repo, settings=settings)
+    assert all(rf.score_explanation for rf in results)
 
 
-# --- AC9 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 4")
-def test_ac9_replication_gate_prevents_single_trial_c2_plus():
-    ...
+# --- AC8 (active, phase 4) ------------------------------------------------------
+def test_ac8_counterfactual_plan_generated_without_execution(settings):
+    from failuretrace import CounterfactualPlan, build_fallback, classify, plan_counterfactual
+    from failuretrace.tests.fixtures.scenarios import instability
+
+    classification = classify(instability(), settings)
+    hyp = build_fallback(classification, instability(), trial_id="t", settings=settings)
+    plan = plan_counterfactual(hyp, settings=settings)
+    assert isinstance(plan, CounterfactualPlan)
+    assert plan.treatment_variables and plan.held_constant_variables
+
+
+# --- AC9 (active, phase 4) ------------------------------------------------------
+def test_ac9_replication_gate_prevents_single_trial_c2_plus(settings):
+    from failuretrace import ReplicationEvidence, evaluate_replication
+
+    single = evaluate_replication(
+        "h", [ReplicationEvidence(trial_id="t1", seed=42)],
+        settings=settings, replication_group_id="g",
+    )
+    assert single is None
 
 
 # --- AC10 (active) --------------------------------------------------------------

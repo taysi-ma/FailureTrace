@@ -70,9 +70,23 @@ CREATE INDEX IF NOT EXISTS idx_promotions_hyp      ON promotions(hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_links_hyp           ON links(hypothesis_id);
 """
 
+_DDL_V2 = """
+CREATE TABLE IF NOT EXISTS plans (
+    plan_id                       TEXT PRIMARY KEY,
+    hypothesis_id                 TEXT NOT NULL,
+    primary_intervention_variable TEXT NOT NULL,
+    coupled_variable              TEXT,
+    settings_hash                 TEXT NOT NULL,
+    data                          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_hyp ON plans(hypothesis_id);
+"""
+
 # (version, ddl) applied in ascending order. Append new steps; never edit shipped ones.
 SCHEMA_STEPS: list[tuple[int, str]] = [
     (1, _DDL_V1),
+    (2, _DDL_V2),
 ]
 
 

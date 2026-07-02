@@ -16,6 +16,7 @@ import logging
 from ..core.enums import CausalSupportLevel
 from ..core.models import (
     DETERMINISTIC_CATEGORIES,
+    CounterfactualPlan,
     FailureHypothesis,
     LinkRecord,
     PromotionRecord,
@@ -112,6 +113,12 @@ class Repository:
     def get_hypothesis(self, hypothesis_id: str) -> FailureHypothesis | None:
         return self.sqlite.get_hypothesis(hypothesis_id)
 
+    def list_hypotheses(self) -> list[FailureHypothesis]:
+        return self.sqlite.list_hypotheses()
+
+    def list_hypotheses_for_trial(self, trial_id: str) -> list[FailureHypothesis]:
+        return self.sqlite.list_hypotheses_for_trial(trial_id)
+
     # --- promotions & effective level ------------------------------------------
     def save_promotion(self, rec: PromotionRecord) -> PromotionRecord:
         self.sqlite.insert_promotion(rec)
@@ -123,6 +130,9 @@ class Repository:
             rec.hypothesis_id,
         )
         return rec
+
+    def list_promotions_for_hypothesis(self, hypothesis_id: str) -> list[PromotionRecord]:
+        return self.sqlite.list_promotions_for_hypothesis(hypothesis_id)
 
     def effective_causal_level(self, hypothesis_id: str) -> CausalSupportLevel | None:
         """Original level overridden by the highest valid promotion; None if unknown."""
@@ -139,3 +149,15 @@ class Repository:
     def save_link(self, rec: LinkRecord) -> LinkRecord:
         self.sqlite.insert_link(rec)
         return rec
+
+    # --- counterfactual plans ---------------------------------------------------
+    def save_plan(self, rec: CounterfactualPlan) -> CounterfactualPlan:
+        self.sqlite.insert_plan(rec)
+        logger.info("saved counterfactual plan %s for hypothesis %s", rec.plan_id, rec.hypothesis_id)
+        return rec
+
+    def get_plan(self, plan_id: str) -> CounterfactualPlan | None:
+        return self.sqlite.get_plan(plan_id)
+
+    def list_plans_for_hypothesis(self, hypothesis_id: str) -> list[CounterfactualPlan]:
+        return self.sqlite.list_plans_for_hypothesis(hypothesis_id)

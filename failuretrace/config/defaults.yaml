@@ -29,6 +29,7 @@ thresholds:
   inconclusive_noise_floor: 0.001
   replication_minimum_trials: 2
   counterfactual_minimum_support: 1
+  c4_minimum_counterfactuals: 2  # C3->C4 needs >=2 confirmations from >=2 distinct contexts
   resource_vram_limit_gb: null   # objective hard-constraint limit; null = no limit (Phase 3)
 
 # --- Confidence rubric (Phase 2). tier value x evidence completeness; see classifier docs. ---
@@ -45,3 +46,16 @@ ollama:
   timeout_seconds: 30
   max_retries: 1
   format: json               # request structured JSON output
+
+# --- Retrieval scoring (Phase 4). Deterministic, explainable; weights live here. ---
+retrieval:
+  weights:
+    category_match: 3.0
+    component_match: 2.0
+    hyperparameter_overlap: 1.5
+    range_proximity: 1.0
+    causal_support: 2.0
+    recency: 0.5
+    repeated_support: 1.5
+  recency_half_life_days: 30
+  log_scale_parameters: [lr, learning_rate, weight_decay]  # proximity in log-space
