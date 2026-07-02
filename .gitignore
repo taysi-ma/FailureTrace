@@ -23,3 +23,10 @@ ENV/
 # Env / secrets
 .env
 *.local
+
+# FailureTrace: reconnaissance target (cloned, not vendored) — see docs/failuretrace_integration_report.md
+autoresearch/
+
+# FailureTrace: runtime data + generated reports (paths overridable via Settings / FAILURETRACE_DATA_DIR)
+failuretrace/data/
+failuretrace/reports/
