@@ -24,7 +24,7 @@ from .core.settings import Settings, get_settings
 from .classifier.context import ClassificationContext
 from .evidence import InterventionContext, build_guidance, retrieve_relevant_failures, summarize_failures
 from .integration.autoresearch_adapter import record_rejected_trial
-from .planner import promote_replications
+from .planner import advance_promotions
 from .reporting import write_failure_map, write_summary
 from .store.migrations import initialize_database
 from .store.repository import Repository
@@ -143,7 +143,7 @@ def run_demo(settings: Settings | None = None, *, repository: Repository | None 
     # --- replication gate: scan C1 hypotheses, promote replicated groups (C1 -> C2) ---
     # Uses the real driver (also emits append-only replication links). Single trials stay
     # C0/C1; only the multi-seed instability group has enough distinct units to reach C2.
-    promotions = promote_replications(repository, settings)
+    promotions = advance_promotions(repository, settings)["replication"]
     group_id = promotions[0].replication_group_id if promotions else new_replication_group_id()
     promoted_id: str | None = promotions[0].hypothesis_id if promotions else None
     supporting = len(promotions[0].supporting_trial_ids) if promotions else 0

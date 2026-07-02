@@ -154,6 +154,13 @@ overridden by the highest valid promotion.
 - **C3 → C4** (`evaluate_c4`, rare by design): `≥ c4_minimum_counterfactuals` independent
   confirmations from `≥ 2` distinct contexts (different changed components / configs).
 
+Accumulation drivers run the whole ladder over the store: `promote_replications` (C1→C2),
+`promote_counterfactuals` (C2→C3, reading `counterfactual` `LinkRecord`s that tie validation
+trials to a hypothesis's plan), and `promote_c4` (C3→C4 across distinct contexts) —
+composed by `advance_promotions` and exposed as `failuretrace gate`. Counterfactual and
+validation links are written as the evidence accrues, so the full C1→C4 lineage is
+inspectable. Each rung is idempotent.
+
 Every promotion is re-checked at the write path (`Repository.save_promotion`): the
 hypothesis and all supporting trials must exist, `from_level` must equal the hypothesis's
 *current* effective level (the ladder cannot be skipped), and a C2 promotion must carry at
@@ -200,4 +207,5 @@ write time by the repository. Inconclusive evidence yields context/soft warnings
 - Optional local embeddings for retrieval (kept out of the MVP; current retrieval is
   deterministic and explainable and needs no vector DB).
 - A thin, tested Optuna/BO consumer of `SearchGuidance` (adapter exists; no sampler shipped).
-- Multi-context C3/C4 accumulation from longer running histories to exercise the upper gate.
+- ~~Multi-context C3/C4 accumulation~~ — **done**: `promote_counterfactuals` / `promote_c4` /
+  `advance_promotions` drive the upper gate from accumulated counterfactual links (§5).

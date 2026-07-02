@@ -5,9 +5,13 @@ from .interventions import DEFAULT_KNOWN_VARIABLES, FAMILIES, InterventionFamily
 from .replication import (
     CounterfactualResult,
     ReplicationEvidence,
+    advance_promotions,
     evaluate_c4,
     evaluate_counterfactual,
     evaluate_replication,
+    link_counterfactual_trial,
+    promote_c4,
+    promote_counterfactuals,
     promote_replications,
 )
 
@@ -22,4 +26,8 @@ __all__ = [
     "evaluate_counterfactual",
     "evaluate_c4",
     "promote_replications",
+    "promote_counterfactuals",
+    "promote_c4",
+    "advance_promotions",
+    "link_counterfactual_trial",
 ]

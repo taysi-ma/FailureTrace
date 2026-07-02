@@ -74,11 +74,11 @@ def test_cli_gate_and_guidance(tmp_path):
 
     gate = _run(tmp_path, "gate")
     assert gate.returncode == 0, gate.stderr
-    assert "promoted 1 hypothesis group" in gate.stdout
+    assert "C1 -> C2" in gate.stdout  # replication promotion reported
 
     # gate is idempotent on a second run
     gate2 = _run(tmp_path, "gate")
-    assert "no hypothesis group" in gate2.stdout
+    assert "no hypothesis met" in gate2.stdout
 
     guidance = _run(tmp_path, "guidance", "--category", "likely_instability", "--component", "optimizer")
     assert guidance.returncode == 0, guidance.stderr

@@ -129,7 +129,7 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
 
 def _cmd_gate(args: argparse.Namespace) -> int:
-    from .planner import promote_replications
+    from .planner import advance_promotions
 
     settings = _build_settings(args)
     if not settings.replication_gate_enabled:
@@ -137,14 +137,16 @@ def _cmd_gate(args: argparse.Namespace) -> int:
         return 0
     initialize_database(settings)
     repository = Repository(settings)
-    promotions = promote_replications(repository, settings)
-    if not promotions:
-        print("replication gate: no hypothesis group met the promotion threshold")
+    # Walk the full ladder: replication (C1->C2), counterfactual (C2->C3), C4 (C3->C4).
+    result = advance_promotions(repository, settings)
+    total = sum(len(v) for v in result.values())
+    if not total:
+        print("gate: no hypothesis met a promotion threshold")
         return 0
-    print(f"replication gate: promoted {len(promotions)} hypothesis group(s) C1 -> C2")
-    for p in promotions:
-        print(f"  - {p.hypothesis_id} (group {p.replication_group_id}, "
-              f"{len(p.supporting_trial_ids)} supporting trials)")
+    labels = {"replication": "C1 -> C2", "counterfactual": "C2 -> C3", "c4": "C3 -> C4"}
+    for rung, promotions in result.items():
+        for p in promotions:
+            print(f"gate: promoted {p.hypothesis_id} {labels[rung]} ({p.rationale})")
     return 0
 
 

@@ -247,6 +247,66 @@ def test_deterministic_reruns_of_one_commit_do_not_replicate(repo, settings, mak
     assert promote_replications(repo, settings) == []
 
 
+# --- multi-context C3/C4 accumulation (advance_promotions) -----------------------
+def _ingest(settings, repo, commit, post, *, components=("optimizer",), config_hash=None, status="discard"):
+    from failuretrace import record_rejected_trial
+
+    return record_rejected_trial(
+        {"git_commit": commit, "status": status, "baseline_metric": 1.0,
+         "changed_components": list(components), "config_hash": config_hash,
+         "hyperparameters": {"MATRIX_LR": 0.08}, "changed_hyperparameters": {"MATRIX_LR": 0.08}},
+        {"post_change_metric": post}, "d",
+        {"telemetry": {"gradient_norm_mean": 1.0, "gradient_norm_std": 3.0, "val_metric": post}, "finished": True},
+        settings=settings, repository=repo,
+    )
+
+
+def test_advance_promotions_walks_full_ladder_across_contexts(make_env):
+    from failuretrace import advance_promotions, link_counterfactual_trial
+
+    settings, repo = make_env(ollama_enabled=False)
+    # two same-family instability trials on distinct commits -> C1 -> C2 (auto-planned)
+    _ingest(settings, repo, "c1", 1.15)
+    _ingest(settings, repo, "c2", 1.15)
+    rep = advance_promotions(repo, settings)["replication"]
+    assert len(rep) == 1
+    hyp_id = rep[0].hypothesis_id
+    assert repo.effective_causal_level(hyp_id) == CausalSupportLevel.C2_replicated_effect
+
+    # a counterfactual validation trial (LR reduced -> improvement) linked to the hypothesis
+    cf1 = _ingest(settings, repo, "cf1", 0.9, config_hash="ctxA", status="completed")
+    link_counterfactual_trial(repo, settings, hypothesis_id=hyp_id, counterfactual_trial_id=cf1.trial_id)
+    step = advance_promotions(repo, settings)
+    assert len(step["counterfactual"]) == 1 and not step["c4"]  # one context is not yet C4
+    assert repo.effective_causal_level(hyp_id) == CausalSupportLevel.C3_counterfactual_supported
+
+    # a second confirmation from a DISTINCT context -> C3 -> C4
+    cf2 = _ingest(settings, repo, "cf2", 0.9, components=("data",), config_hash="ctxB", status="completed")
+    link_counterfactual_trial(repo, settings, hypothesis_id=hyp_id, counterfactual_trial_id=cf2.trial_id)
+    assert len(advance_promotions(repo, settings)["c4"]) == 1
+    assert repo.effective_causal_level(hyp_id) == CausalSupportLevel.C4_robust_rule
+    # idempotent: nothing more to promote
+    assert not any(advance_promotions(repo, settings).values())
+
+
+def test_c4_needs_two_distinct_contexts_not_just_count(make_env):
+    from failuretrace import advance_promotions, link_counterfactual_trial
+
+    settings, repo = make_env(ollama_enabled=False)
+    _ingest(settings, repo, "c1", 1.15)
+    _ingest(settings, repo, "c2", 1.15)
+    hyp_id = advance_promotions(repo, settings)["replication"][0].hypothesis_id
+
+    # two confirmations, but both from the SAME context -> reaches C3, never C4
+    for commit in ("cf1", "cf1b"):
+        cf = _ingest(settings, repo, commit, 0.9, config_hash="ctxA", status="completed")
+        link_counterfactual_trial(repo, settings, hypothesis_id=hyp_id, counterfactual_trial_id=cf.trial_id)
+    advance_promotions(repo, settings)  # -> C3
+    assert repo.effective_causal_level(hyp_id) == CausalSupportLevel.C3_counterfactual_supported
+    assert not advance_promotions(repo, settings)["c4"]  # 2 confirmations, 1 context -> no C4
+    assert repo.effective_causal_level(hyp_id) == CausalSupportLevel.C3_counterfactual_supported
+
+
 # --- promotion persists and raises the effective level (not the record) ----------
 def test_replication_promotion_persists_and_raises_effective_level(repo, settings, make_trial):
     _, hyp = _persist_c1(repo, settings, make_trial)

@@ -57,10 +57,14 @@ from .evidence import (
 from .planner import (
     CounterfactualResult,
     ReplicationEvidence,
+    advance_promotions,
     evaluate_c4,
     evaluate_counterfactual,
     evaluate_replication,
+    link_counterfactual_trial,
     plan_counterfactual,
+    promote_c4,
+    promote_counterfactuals,
     promote_replications,
 )
 from .integration import (
@@ -139,6 +143,10 @@ __all__ = [
     "evaluate_counterfactual",
     "evaluate_c4",
     "promote_replications",
+    "promote_counterfactuals",
+    "promote_c4",
+    "advance_promotions",
+    "link_counterfactual_trial",
     # integration (autoresearch-facing public API)
     "record_rejected_trial",
     "record_from_run",

@@ -256,6 +256,111 @@ def evaluate_counterfactual(
     )
 
 
+def link_counterfactual_trial(
+    repository: Repository,
+    settings: Settings,
+    *,
+    hypothesis_id: str,
+    counterfactual_trial_id: str,
+) -> LinkRecord:
+    """Record that a persisted trial was run to validate a hypothesis's counterfactual plan.
+
+    This append-only ``counterfactual`` link is what :func:`promote_counterfactuals` and
+    :func:`promote_c4` later read to accumulate validation evidence. Both the hypothesis and
+    the trial must already exist (enforced by the links table foreign keys)."""
+    return repository.save_link(LinkRecord(
+        link_id=new_link_id(),
+        link_type=LinkType.counterfactual,
+        hypothesis_id=hypothesis_id,
+        trial_id=counterfactual_trial_id,           # FK-enforced existence
+        counterfactual_trial_id=counterfactual_trial_id,
+        settings_hash=settings.settings_hash(),
+        note="counterfactual validation trial for a proposed plan",
+    ))
+
+
+def _counterfactual_results(repository: Repository, hypothesis_id: str) -> list[CounterfactualResult]:
+    """Build ``CounterfactualResult``s from every counterfactual-linked trial of a hypothesis."""
+    results: list[CounterfactualResult] = []
+    for link in repository.list_links_for_hypothesis(hypothesis_id):
+        if link.link_type != LinkType.counterfactual or not link.counterfactual_trial_id:
+            continue
+        trial = repository.get_trial(link.counterfactual_trial_id)
+        if trial is None or trial.baseline_metric is None or trial.post_change_metric is None:
+            continue
+        results.append(CounterfactualResult(
+            trial_id=trial.trial_id,
+            baseline_metric=trial.baseline_metric,
+            post_change_metric=trial.post_change_metric,
+            metric_direction=trial.metric_direction,
+            changed_components=trial.changed_components,
+            config_hash=trial.config_hash,
+        ))
+    return results
+
+
+def promote_counterfactuals(repository: Repository, settings: Settings) -> list[PromotionRecord]:
+    """Scan effective-C2 hypotheses and promote to C3 those whose linked counterfactual
+    trials produced the expected directional result (a persisted plan is required by the
+    gate). Persists the promotion and a ``validation`` link. Idempotent: a hypothesis past
+    C2 is skipped."""
+    promotions: list[PromotionRecord] = []
+    for hyp in repository.list_hypotheses():
+        if repository.effective_causal_level(hyp.hypothesis_id) != _C2:
+            continue
+        results = _counterfactual_results(repository, hyp.hypothesis_id)
+        if not results:
+            continue
+        promotion = evaluate_counterfactual(
+            hyp.hypothesis_id, results, settings=settings, repository=repository
+        )
+        if promotion is None:
+            continue
+        repository.save_promotion(promotion)
+        repository.save_link(LinkRecord(
+            link_id=new_link_id(),
+            link_type=LinkType.validation,
+            hypothesis_id=hyp.hypothesis_id,
+            trial_id=promotion.counterfactual_trial_id,
+            counterfactual_trial_id=promotion.counterfactual_trial_id,
+            settings_hash=settings.settings_hash(),
+            note="counterfactual validation supporting C2->C3",
+        ))
+        promotions.append(promotion)
+    logger.info("counterfactual gate promoted %d hypothesis(es) to C3", len(promotions))
+    return promotions
+
+
+def promote_c4(repository: Repository, settings: Settings) -> list[PromotionRecord]:
+    """Scan effective-C3 hypotheses and promote to C4 those with enough counterfactual
+    confirmations across >= 2 distinct contexts. Rare by design; idempotent."""
+    promotions: list[PromotionRecord] = []
+    for hyp in repository.list_hypotheses():
+        if repository.effective_causal_level(hyp.hypothesis_id) != _C3:
+            continue
+        confirmations = _counterfactual_results(repository, hyp.hypothesis_id)
+        promotion = evaluate_c4(
+            hyp.hypothesis_id, confirmations, settings=settings, repository=repository
+        )
+        if promotion is None:
+            continue
+        repository.save_promotion(promotion)
+        promotions.append(promotion)
+    logger.info("c4 gate promoted %d hypothesis(es) to C4", len(promotions))
+    return promotions
+
+
+def advance_promotions(repository: Repository, settings: Settings) -> dict[str, list[PromotionRecord]]:
+    """Run the full promotion ladder in order — replication (C1->C2), counterfactual
+    (C2->C3), then C4 (C3->C4) — so a hypothesis with sufficient accumulated evidence can
+    climb multiple rungs in one pass. Each rung is individually idempotent."""
+    return {
+        "replication": promote_replications(repository, settings),
+        "counterfactual": promote_counterfactuals(repository, settings),
+        "c4": promote_c4(repository, settings),
+    }
+
+
 def evaluate_c4(
     hypothesis_id: str,
     confirmations: list[CounterfactualResult],
