@@ -199,19 +199,17 @@ def rule_possible_over_regularization(
     detail = _regularization_increase(ctx.baseline_hyperparameters, ctx.changed_hyperparameters)
     if detail is None or _regressed(ctx) is not True:
         return None
-    # "both train and val worsen": require train worsening when train metrics are available.
-    train_worse: bool | None = None
-    if ctx.baseline_train_metric is not None and ctx.post_train_metric is not None:
-        train_worse = improvement(
-            ctx.baseline_train_metric, ctx.post_train_metric, ctx.metric_direction
-        ) < 0
-        if train_worse is False:
-            return None
-    suffix = " and train regressed" if train_worse else ""
+    # Spec: BOTH train and val must worsen. Without train metrics we cannot confirm "both",
+    # so this rule requires train-regression *evidence* rather than firing on the val signal
+    # alone (which would over-claim over-regularization from a single-sided signal).
+    if ctx.baseline_train_metric is None or ctx.post_train_metric is None:
+        return None
+    if improvement(ctx.baseline_train_metric, ctx.post_train_metric, ctx.metric_direction) >= 0:
+        return None  # train did not worsen -> not over-regularization
     return RuleResult(
         FailureCategory.possible_over_regularization,
         "weak_heuristic",
-        f"stronger regularization ({detail}); val regressed{suffix}",
+        f"stronger regularization ({detail}); both train and val regressed",
         "possible_over_regularization",
         ("baseline_metric", "post_change_metric", "baseline_train_metric", "post_train_metric"),
     )

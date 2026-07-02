@@ -184,12 +184,31 @@ BEGIN SELECT RAISE(ABORT, '{t} are append-only / immutable'); END;
     for t in _IMMUTABLE_TABLES
 )
 
+# v5: persist the deterministic classifier output as its own immutable, trial-linked record.
+# The classifier's category, confidence, and triggered rules survive verbatim even when the
+# optional LLM later overwrites the hypothesis narrative (independent provenance).
+_DDL_V5 = """
+CREATE TABLE classifications (
+    trial_id      TEXT PRIMARY KEY,
+    category      TEXT NOT NULL,
+    confidence    REAL NOT NULL,
+    settings_hash TEXT NOT NULL,
+    data          TEXT NOT NULL,
+    FOREIGN KEY (trial_id) REFERENCES trials(trial_id)
+);
+CREATE TRIGGER IF NOT EXISTS trg_classifications_no_update BEFORE UPDATE ON classifications
+BEGIN SELECT RAISE(ABORT, 'classifications are append-only / immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_classifications_no_delete BEFORE DELETE ON classifications
+BEGIN SELECT RAISE(ABORT, 'classifications are append-only / immutable'); END;
+"""
+
 # (version, ddl) applied in ascending order. Append new steps; never edit shipped ones.
 SCHEMA_STEPS: list[tuple[int, str]] = [
     (1, _DDL_V1),
     (2, _DDL_V2),
     (3, _DDL_V3),
     (4, _DDL_V4),
+    (5, _DDL_V5),
 ]
 
 

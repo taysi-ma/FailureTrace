@@ -43,14 +43,36 @@ class Repository:
 
     # --- trials -----------------------------------------------------------------
     def save_trial(self, rec: TrialRecord) -> TrialRecord:
-        """Persist a trial write-once to SQLite and (if enabled) raw JSON."""
+        """Persist a trial write-once.
+
+        SQLite is authoritative and is written **first** — a single atomic transaction that
+        already carries the full serialized record in its ``data`` column. The raw-JSON
+        sidecar is a derived export written second. A crash between the two therefore leaves
+        the authoritative store complete (never a committed row without its data) and the
+        sidecar reconstructable via :meth:`reconcile_json`, so the stores can never end up
+        permanently disagreeing.
+        """
         if self.sqlite.get_trial(rec.trial_id) is not None or self.json.exists(rec.trial_id):
             raise DuplicateRecordError(f"trial {rec.trial_id} already exists (write-once)")
+        self.sqlite.insert_trial(rec)
         if self.settings.store_raw_json:
             self.json.write_trial(rec)
-        self.sqlite.insert_trial(rec)
         logger.info("saved trial %s (status=%s)", rec.trial_id, rec.status)
         return rec
+
+    def reconcile_json(self) -> int:
+        """Backfill raw-JSON sidecars missing for persisted trials (e.g. after a crash
+        between the SQLite commit and the JSON write). Returns the number restored."""
+        if not self.settings.store_raw_json:
+            return 0
+        restored = 0
+        for trial in self.sqlite.list_trials():
+            if not self.json.exists(trial.trial_id):
+                self.json.write_trial(trial)
+                restored += 1
+        if restored:
+            logger.info("reconciled %d missing raw-JSON trial sidecar(s)", restored)
+        return restored
 
     def get_trial(self, trial_id: str) -> TrialRecord | None:
         return self.sqlite.get_trial(trial_id)
@@ -214,6 +236,23 @@ class Repository:
 
     def list_links_for_hypothesis(self, hypothesis_id: str) -> list[LinkRecord]:
         return self.sqlite.list_links_for_hypothesis(hypothesis_id)
+
+    # --- classifications --------------------------------------------------------
+    def save_classification(self, trial_id: str, classification) -> None:
+        """Persist the deterministic classifier output for a trial (independent provenance)."""
+        self.sqlite.insert_classification(
+            trial_id,
+            str(classification.category),
+            float(classification.confidence),
+            classification.settings_hash,
+            classification.model_dump_json(),
+        )
+
+    def get_classification(self, trial_id: str):
+        from ..classifier.classifier import FailureClassification  # local: avoid import cycle
+
+        data = self.sqlite.get_classification_json(trial_id)
+        return FailureClassification.model_validate_json(data) if data else None
 
     # --- counterfactual plans ---------------------------------------------------
     def save_plan(self, rec: CounterfactualPlan) -> CounterfactualPlan:

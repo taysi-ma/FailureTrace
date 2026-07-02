@@ -48,6 +48,26 @@ def test_t12_relevant_ranks_above_irrelevant(repo, settings, make_trial):
     assert results[0].relevance_score > results[-1].relevance_score
 
 
+# --- min-score cutoff drops weak / recency-only matches -------------------------
+def test_retrieval_min_score_cutoff_drops_weak_matches(make_env, make_trial):
+    settings, repo = make_env(ollama_enabled=False, retrieval={"min_relevance_score": 1.0})
+    _seed(repo, settings, make_trial, instability(),
+          changed_components=["optimizer"], hyperparameters={"MATRIX_LR": 0.08})
+    _seed(repo, settings, make_trial, overfitting(),
+          git_commit="c2", changed_components=["data"], hyperparameters={"WEIGHT_DECAY": 0.3})
+    ic = InterventionContext(
+        category=FailureCategory.likely_instability,
+        changed_components=["optimizer"],
+        changed_hyperparameters={"MATRIX_LR": 0.08},
+    )
+    results = retrieve_relevant_failures(ic, repository=repo, settings=settings)
+    # only the strongly-relevant instability clears the cutoff; the recency-only overfitting
+    # match (score well under 1.0) is dropped rather than padding the results.
+    assert results
+    assert all(rf.hypothesis.category == FailureCategory.likely_instability for rf in results)
+    assert all(rf.relevance_score > 1.0 for rf in results)
+
+
 # --- T13: score explanations present and non-empty ------------------------------
 def test_t13_score_explanations_present(repo, settings, make_trial):
     _seed(repo, settings, make_trial, instability(),

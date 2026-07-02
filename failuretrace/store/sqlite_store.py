@@ -216,6 +216,21 @@ class SqliteStore:
         )
         return [LinkRecord.model_validate_json(r["data"]) for r in rows]
 
+    # --- classifications --------------------------------------------------------
+    def insert_classification(
+        self, trial_id: str, category: str, confidence: float, settings_hash: str, data: str
+    ) -> None:
+        self._insert(
+            "INSERT INTO classifications (trial_id, category, confidence, settings_hash, data) "
+            "VALUES (?,?,?,?,?)",
+            (trial_id, category, confidence, settings_hash, data),
+            what=f"classification for {trial_id}",
+        )
+
+    def get_classification_json(self, trial_id: str) -> str | None:
+        row = self._fetchone("SELECT data FROM classifications WHERE trial_id=?", (trial_id,))
+        return row["data"] if row else None
+
     # --- counterfactual plans ---------------------------------------------------
     def insert_plan(self, rec: CounterfactualPlan) -> None:
         self._insert(

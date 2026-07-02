@@ -1,0 +1,44 @@
+name: ci
+
+# Provider-free, CPU-only, offline test suite. No GPU, no Ollama, no network services
+# are required — every test runs deterministically on a stock runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (with extras)
+        run: pip install -e ".[analysis,ollama,dev]"
+      - name: Run test suite (CPU-only, offline)
+        run: pytest -q
+
+  packaging-smoke:
+    # The package must be usable once installed, from any working directory — guards the
+    # "No module named failuretrace" trap of running it uninstalled outside the repo root.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install core only (minimal, provider-free)
+        run: pip install -e .
+      - name: Run the CLI from a different directory
+        run: |
+          cd "$RUNNER_TEMP"
+          failuretrace --data-dir ./ftdata --reports-dir ./ftreports init
+          python -m failuretrace --data-dir ./ftdata2 --reports-dir ./ftreports2 demo

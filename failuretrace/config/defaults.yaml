@@ -66,3 +66,7 @@ retrieval:
     repeated_support: 1.5
   recency_half_life_days: 30
   log_scale_parameters: [lr, learning_rate, weight_decay]  # proximity in log-space
+  # Minimum relevance for a prior failure to be returned at all. 0.0 keeps default behavior
+  # (drops only exact-zero matches); raise it so weak / recency-only matches cannot pad
+  # top-k and inflate downstream guidance counts.
+  min_relevance_score: 0.0

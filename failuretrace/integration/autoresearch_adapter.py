@@ -218,6 +218,10 @@ def record_rejected_trial(
         requires_matched_seeds=bool(ec.get("requires_matched_seeds", False)),
     )
     classification = classify(ctx, settings)
+    # Persist the deterministic classifier output as its own immutable record, so its
+    # category/confidence/triggered-rules survive even if the LLM later rewrites the
+    # hypothesis narrative.
+    repository.save_classification(trial.trial_id, classification)
     hypothesis = analyze(
         classification, ctx,
         trial_id=trial.trial_id, settings=settings, repository=repository,

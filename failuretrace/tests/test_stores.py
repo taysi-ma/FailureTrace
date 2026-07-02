@@ -70,7 +70,7 @@ def test_t16_initialize_database_idempotent(settings):
             "SELECT version FROM schema_version ORDER BY version")]
     finally:
         conn.close()
-    assert versions == [1, 2, 3, 4]  # each step applied exactly once
+    assert versions == [1, 2, 3, 4, 5]  # each step applied exactly once
 
 
 # --- write-once / immutability --------------------------------------------------
@@ -79,6 +79,44 @@ def test_trial_write_once(repo, make_trial):
     repo.save_trial(trial)
     with pytest.raises(DuplicateRecordError):
         repo.save_trial(trial)
+
+
+def test_concurrent_writers_all_persist(repo, make_trial):
+    # WAL + busy_timeout + per-operation connections: concurrent writers serialize and all
+    # land (Phase-0 found autoresearch runs parallel per-GPU trials -> concurrent writers).
+    import threading
+
+    errors: list[Exception] = []
+
+    def worker(base: int) -> None:
+        try:
+            for i in range(5):
+                repo.save_trial(make_trial(trial_id=f"c{base}_{i}", seed=base))
+        except Exception as exc:  # noqa: BLE001 - surface to the assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, errors
+    assert len(repo.list_trials()) == 30  # 6 writers x 5 trials, none lost
+
+
+def test_reconcile_json_restores_missing_sidecar(repo, make_trial):
+    trial = make_trial()
+    repo.save_trial(trial)
+    # simulate a crash after the SQLite commit but before/at the JSON write
+    repo.json._path(trial.trial_id).unlink()
+    assert not repo.json.exists(trial.trial_id)
+    assert repo.get_trial(trial.trial_id) is not None  # authoritative store still has it
+
+    assert repo.reconcile_json() == 1
+    assert repo.json.exists(trial.trial_id)
+    assert repo.json.read_trial(trial.trial_id) == trial
+    assert repo.reconcile_json() == 0  # nothing left to restore
 
 
 def test_immutability_is_physical_update_and_delete_blocked(repo, make_trial):

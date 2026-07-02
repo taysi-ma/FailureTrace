@@ -15,6 +15,7 @@ from failuretrace.tests.fixtures.scenarios import (
     instability,
     missing_telemetry,
     oom_crash,
+    over_regularization,
 )
 
 
@@ -99,6 +100,16 @@ def test_classification_is_explainable_and_stamped(settings):
     result = classify(instability(), settings)
     assert result.observations and result.triggered_rules
     assert result.settings_hash == settings.settings_hash()
+
+
+def test_over_regularization_needs_train_regression_evidence(settings):
+    # with train metrics showing regression, the rule fires (both train and val worsen)
+    assert classify(over_regularization(), settings).category == (
+        FailureCategory.possible_over_regularization
+    )
+    # without train metrics we cannot confirm "both worsen" -> must NOT claim over-regularization
+    val_only = over_regularization(baseline_train_metric=None, post_train_metric=None)
+    assert classify(val_only, settings).category != FailureCategory.possible_over_regularization
 
 
 def test_alternative_categories_recorded(settings):

@@ -30,6 +30,7 @@ class RetrievalConfig(BaseModel):
     weights: dict[str, float] = Field(default_factory=dict)
     recency_half_life_days: float = 30.0
     log_scale_parameters: list[str] = Field(default_factory=list)
+    min_relevance_score: float = 0.0
 
 
 def load_retrieval_config(settings: Settings) -> RetrievalConfig:
@@ -180,5 +181,7 @@ def retrieve_relevant_failures(
                 effective_level=effective,
             )
         )
+    # Drop weak matches so they cannot pad top-k / inflate downstream guidance counts.
+    scored = [rf for rf in scored if rf.relevance_score > cfg.min_relevance_score]
     scored.sort(key=lambda rf: rf.relevance_score, reverse=True)
     return scored[:top_k]

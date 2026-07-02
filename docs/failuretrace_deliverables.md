@@ -6,10 +6,13 @@ hypotheses, stores them as reusable negative evidence, and uses them to guide fu
 experimentation — **without ever claiming causality from a single trial**.
 
 Status: Phases 0–6 complete, plus post-audit hardening — **P0** (evidence-checked
-promotion gate, idempotent ingestion, database foreign keys) and **P1** (wired governance
+promotion gate, idempotent ingestion, database foreign keys), **P1** (wired governance
 loop with `gate`/`guidance` CLI + auto-planning, commit-based replication key, explicit
-replication links, physical immutability triggers, LLM-confidence provenance). Test suite:
-**151 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
+replication links, physical immutability triggers, LLM-confidence provenance), and **P2**
+(CI + packaging smoke, concurrency test + atomic SQLite-first dual write with JSON
+reconcile, tightened over-regularization rule, configurable retrieval min-score cutoff,
+persisted classifier provenance, realistic-artifact adapter tests). Test suite:
+**159 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
 
 ---
 
@@ -51,9 +54,12 @@ conditions; confidence from a fixed rubric; everything runs CPU-only and offline
   (`improvement()`, `settings_hash()`), `ids.py`
 - `config/defaults.yaml` — every threshold / weight / flag (no magic numbers in code)
 - `store/` — `sqlite_store.py` (WAL + busy_timeout; foreign keys enforced),
-  `json_store.py` (write-once), `migrations.py` (idempotent, schema v1–v3; v3 adds
-  referential-integrity foreign keys), `repository.py` (**the only write path**;
-  hard-constraint gate; **promotion evidence gate**; effective-level computation)
+  `json_store.py` (write-once), `migrations.py` (idempotent, schema v1–v5: v3 foreign keys,
+  v4 immutability triggers, v5 persisted classifications), `repository.py` (**the only write
+  path**; hard-constraint gate; **promotion evidence gate**; SQLite-first atomic dual write
+  with `reconcile_json`; effective-level computation)
+- `.github/workflows/ci.yml` — CPU-only/offline pytest on py3.11–3.13 + a packaging smoke
+  job that installs the wheel and runs the CLI from a different directory
 - `telemetry/` — `schema.py`, `collector.py`, `adapters.py` (`parse_run_log`)
 - `classifier/` — `rules.py`, `classifier.py`, `thresholds.py`, `context.py`
 - `analyst/` — `fallback.py`, `ollama_client.py`, `prompt.py`, `service.py`
@@ -177,13 +183,20 @@ write time by the repository. Inconclusive evidence yields context/soft warnings
   or overwrite the rubric confidence — its stated belief is recorded only in `llm_confidence`.
 - **Reports**: matplotlib is optional — PNGs are produced only when it is installed; the
   markdown artifacts are always produced.
-- `prepare.py`/`train.py` require an NVIDIA GPU + dataset to execute and were never run
-  (out of the CPU-only, provider-free remit).
+- **Heuristic tuning is data-limited**: `possible_over_regularization` now requires
+  train-regression evidence (no longer fires on the val signal alone), but the undertraining
+  (whole-run loss delta) and overfitting (absolute train/val gap) proxies still await
+  per-step / baseline-gap telemetry autoresearch does not emit — fuller tuning is deferred
+  to a real-data pass rather than guessed against synthetic fixtures.
+- `prepare.py`/`train.py` require an NVIDIA GPU + dataset to execute; the adapters are
+  validated end-to-end against **realistic** CPU stand-in artifacts (real `run.log` OOM
+  traceback / NaN `FAIL` marker → resource_pressure / divergence, and a `results.tsv`
+  corpus), but a live GPU run against the real loop is still the one unshipped validation.
 
 ## 7. Suggested next phase (beyond the current spec)
 
-- A real live-run integration test against a GPU host (record from an actual autoresearch
-  loop), and a small results.tsv corpus for offline-backfill validation.
+- A real live-run integration against a GPU host (record from an actual autoresearch loop)
+  — the CPU-only adapter tests now cover the artifact shapes, but not a live end-to-end run.
 - Optional local embeddings for retrieval (kept out of the MVP; current retrieval is
   deterministic and explainable and needs no vector DB).
 - A thin, tested Optuna/BO consumer of `SearchGuidance` (adapter exists; no sampler shipped).

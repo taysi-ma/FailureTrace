@@ -35,6 +35,21 @@ depth:            8
 _TRAIN_PY_BASE = "MATRIX_LR = 0.04\nWEIGHT_DECAY = 0.1\nDEPTH = 8\nprint('train')\n"
 _TRAIN_PY_EXP = "MATRIX_LR = 0.08\nWEIGHT_DECAY = 0.1\nDEPTH = 8\nprint('train')\n"
 
+# Realistic autoresearch crash artifacts (the exact stdout shapes train.py produces on an
+# OOM traceback and on the NaN/loss-blowup FAIL marker). Used to validate the live adapter
+# end-to-end on CPU — a real GPU run is out of the provider-free remit (see docs).
+_OOM_RUN_LOG = """\
+step 00007 (0.7%) | loss: 3.21 | lrm: 0.04 | dt: 310ms | tok/sec: 1.6e6 | mfu: 39.8 | epoch: 0
+Traceback (most recent call last):
+  File "train.py", line 552, in <module>
+    loss.backward()
+torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB
+"""
+_NAN_RUN_LOG = """\
+step 00010 (1.0%) | loss: nan | lrm: 0.09 | dt: 300ms | tok/sec: 1.6e6 | mfu: 39.8 | epoch: 0
+FAIL
+"""
+
 
 def _git(repo: Path, *args: str) -> str:
     out = subprocess.run(
@@ -187,6 +202,71 @@ def test_ingestion_auto_plans_counterfactual_for_plannable_category(make_env):
     hyp = repo.list_hypotheses_for_trial(trial.trial_id)[0]
     plans = repo.list_plans_for_hypothesis(hyp.hypothesis_id)
     assert plans and plans[0].primary_intervention_variable == "MATRIX_LR"
+
+
+def test_ingestion_persists_deterministic_classification(make_env):
+    settings, repo = make_env(ollama_enabled=False)
+    trial = record_rejected_trial(
+        {"git_commit": "x", "status": "discard", "baseline_metric": 1.0, "changed_components": ["optimizer"]},
+        {"post_change_metric": 1.15},
+        "d",
+        {"telemetry": {"gradient_norm_mean": 1.0, "gradient_norm_std": 3.0, "val_metric": 1.15}, "finished": True},
+        settings=settings, repository=repo,
+    )
+    classification = repo.get_classification(trial.trial_id)
+    assert classification is not None
+    assert classification.category == FailureCategory.likely_instability
+    assert classification.triggered_rules  # deterministic provenance preserved verbatim
+
+
+# --- realistic autoresearch artifacts, end-to-end (CPU-only stand-in for a GPU run) ---
+def test_record_from_run_oom_traceback_is_resource_pressure(make_env, tmp_path):
+    settings, repo = make_env(ollama_enabled=False)
+    repo_root = tmp_path / "autoresearch"
+    base, exp = _make_git_repo(repo_root)
+    trial = record_from_run(
+        settings=settings, repository=repo, commit=exp, status="crash",
+        run_log_text=_OOM_RUN_LOG, repo_path=str(repo_root), baseline_metric=1.0, baseline_commit=base,
+    )
+    assert trial.status == TrialStatus.failed_oom
+    assert repo.list_hypotheses_for_trial(trial.trial_id)[0].category == FailureCategory.resource_pressure
+    assert repo.get_classification(trial.trial_id).category == FailureCategory.resource_pressure
+
+
+def test_record_from_run_nan_fail_marker_is_divergence(make_env, tmp_path):
+    settings, repo = make_env(ollama_enabled=False)
+    repo_root = tmp_path / "autoresearch"
+    _base, exp = _make_git_repo(repo_root)
+    trial = record_from_run(
+        settings=settings, repository=repo, commit=exp, status="crash",
+        run_log_text=_NAN_RUN_LOG, repo_path=str(repo_root), baseline_metric=1.0,
+    )
+    assert repo.list_hypotheses_for_trial(trial.trial_id)[0].category == FailureCategory.divergence
+
+
+def test_realistic_results_tsv_corpus_offline(make_env, tmp_path):
+    settings, repo = make_env(ollama_enabled=False)
+    repo_root = tmp_path / "autoresearch"
+    _make_git_repo(repo_root)
+    # a realistic multi-row corpus in the exact program.md contract (keep/discard/crash,
+    # val_bpb=0.000000 + memory_gb=0.0 crash sentinels, commas-free descriptions)
+    tsv = tmp_path / "results.tsv"
+    tsv.write_text(
+        "commit\tval_bpb\tmemory_gb\tstatus\tdescription\n"
+        "a1b2c3d\t0.997900\t44.0\tkeep\tbaseline\n"
+        "c3d4e5f\t1.005000\t44.0\tdiscard\tswitch to GeLU activation\n"
+        "d4e5f6a\t0.000000\t0.0\tcrash\tdouble model width OOM\n"
+        "e5f6a7b\t1.002000\t44.1\tdiscard\traise dropout\n",
+        encoding="utf-8",
+    )
+    recorded = ingest_results_tsv(settings=settings, repository=repo, tsv_path=tsv, repo_path=str(repo_root))
+    assert len(recorded) == 3  # keep excluded by default
+    # crash row: the val_bpb=0.0 sentinel is treated as missing, never a real 0 bpb
+    crash = next(t for t in recorded if t.status in (TrialStatus.failed_oom, TrialStatus.failed_runtime))
+    assert crash.post_change_metric is None
+    # every row produced a persisted classification (nothing silently dropped), idempotent re-scan
+    assert all(repo.get_classification(t.trial_id) is not None for t in recorded)
+    assert ingest_results_tsv(settings=settings, repository=repo, tsv_path=tsv, repo_path=str(repo_root)) == []
 
 
 # --- offline batch backfill (best-effort) ---------------------------------------
