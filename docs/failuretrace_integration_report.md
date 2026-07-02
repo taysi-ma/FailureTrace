@@ -257,3 +257,63 @@ mode with a **busy_timeout**, and **all writes serialized through the repository
 - [x] No package code written; no autoresearch file modified.
 
 **Awaiting user approval to proceed to Phase 1 (Foundation).**
+
+---
+
+## 8. Phase 5 implementation record (CLI, reporting, integration)
+
+Implements the §3.7 design. **No autoresearch file was modified** — integration is entirely
+in the `failuretrace/` package plus this document.
+
+### 8.1 Files added (all under `failuretrace/`)
+- `cli.py`, `__main__.py` — CLI: `init`, `ingest <trial.json>`, `record …` (live hook),
+  `report {summary,failures,map,trial <id>}`. Global flags `--config/--data-dir/
+  --reports-dir/--no-ollama`.
+- `integration/autoresearch_adapter.py` — public `record_rejected_trial(experiment_context,
+  metrics, diff, runtime_diagnostics)`; `render_program_md_hook()` (flag-guarded snippet,
+  `None` when disabled); `record_from_run()` (Path A live feeder: parses `run.log`, captures
+  `git diff`, scrapes tunables from `train.py@commit`); `ingest_results_tsv()` (Path B offline
+  backfill, best-effort/lossy as documented in §3.7).
+- `integration/optimizer_adapter.py` — `guidance_for()` → `SearchGuidance`; `soft_penalty_terms()`.
+  No Optuna dependency, no sampler.
+- `reporting/{summary,failure_map,trial,plots}.py` — markdown artifacts always; matplotlib
+  PNGs when available (guarded). Reports separate C0/C1/C2/C3/C4 and never label C0/C1 causal.
+
+### 8.2 Files modified
+- `failuretrace/__init__.py` — export `record_rejected_trial`, `record_from_run`,
+  `render_program_md_hook`, `guidance_for`.
+- `failuretrace/tests/` — added `test_integration.py`, `test_reporting.py`, `test_cli.py`;
+  un-skipped acceptance tests **AC1, AC11, AC13**.
+
+### 8.3 The program.md hook (Path A) — paste verbatim only when enabling
+Emitted by `render_program_md_hook(settings, branch=…)`; **absent when `enabled: false`**:
+```
+<!-- failuretrace:begin (present only when failuretrace.enabled) -->
+### Optional: capture rejected/crashed trials as negative evidence (FailureTrace)
+
+After step 7 (append the `results.tsv` row) and BEFORE any `git reset` or the next run,
+if the status is `discard` or `crash`, record the trial:
+
+    python -m failuretrace record --commit <hash> --status <discard|crash> \
+        --run-log run.log --repo . --branch autoresearch/<tag> --description "<desc>"
+
+This reads `run.log` + the `git diff` + the `results.tsv` row and stores a `TrialRecord`
+plus a deterministic failure hypothesis. It NEVER edits `train.py`, changes the metric,
+or alters the keep/reset decision.
+<!-- failuretrace:end -->
+```
+
+### 8.4 Gate 5 — T15 result
+- **(a) automated** (`test_ac13…`, `test_disabled_is_noop`): with `enabled: false`,
+  `render_program_md_hook()` returns `None` (the hook is absent, so autoresearch never imports
+  FailureTrace) and `record_rejected_trial()` is a no-op returning `None` with zero SQLite/JSON
+  writes. ✅
+- **(b) manual**: the clone at `./autoresearch` is untouched — still pinned at `228791f`,
+  `git status --porcelain` **clean**. autoresearch ships **no test suite** (no pytest in its
+  `pyproject.toml`); the available smoke check `python -c "ast.parse(train.py); ast.parse(
+  prepare.py)"` passes **before and after** and is identical by construction (the files are
+  byte-for-byte unchanged; `prepare.py`/`train.py` require an NVIDIA GPU + dataset to execute,
+  out of the CPU-only remit — §6). No patch is applied to autoresearch when the flag is off, so
+  behavior is trivially identical. ✅
+- CLI commands run against demo data (`test_cli.py`, `test_ac11…`). Full suite green
+  (**133 passed, 0 skipped**, CPU-only, offline). ✅

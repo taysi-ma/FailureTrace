@@ -33,10 +33,23 @@ FORBIDDEN_PROVIDERS = (
 )
 
 
-# --- AC1 ------------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 5")
-def test_ac1_synthetic_rejected_trial_ingested_via_public_api():
-    ...
+# --- AC1 (active, phase 5) ------------------------------------------------------
+def test_ac1_synthetic_rejected_trial_ingested_via_public_api(make_env):
+    from failuretrace import record_rejected_trial
+
+    settings, repo = make_env(ollama_enabled=False)
+    trial = record_rejected_trial(
+        {"git_commit": "c0ffee1", "seed": 42, "status": "discard", "baseline_metric": 1.0,
+         "changed_components": ["optimizer"], "hyperparameters": {"MATRIX_LR": 0.08}},
+        {"post_change_metric": 1.15},
+        "diff --git a/train.py b/train.py",
+        {"telemetry": {"gradient_norm_mean": 1.0, "gradient_norm_std": 3.0, "val_metric": 1.15}, "finished": True},
+        settings=settings, repository=repo,
+    )
+    assert trial is not None
+    assert repo.get_trial(trial.trial_id) is not None          # SQLite
+    assert repo.json.exists(trial.trial_id)                    # JSON
+    assert repo.list_hypotheses_for_trial(trial.trial_id)      # fallback hypothesis persisted
 
 
 # --- AC2 (active, phase 2) ------------------------------------------------------
@@ -155,10 +168,40 @@ def test_ac10_metric_direction_respected():
     assert improvement(baseline, post, MetricDirection.maximize) < 0   # higher is better
 
 
-# --- AC11 -----------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 5")
-def test_ac11_cli_summary_and_failure_map_reports_run():
-    ...
+# --- AC11 (active, phase 5) -----------------------------------------------------
+def test_ac11_cli_summary_and_failure_map_reports_run(tmp_path):
+    import json
+    import os
+    import subprocess
+
+    env = dict(os.environ, PYTHONPATH=str(_REPO_ROOT))
+    base = [
+        sys.executable, "-m", "failuretrace",
+        "--data-dir", str(tmp_path / "data"), "--reports-dir", str(tmp_path / "reports"), "--no-ollama",
+    ]
+
+    def run(*args):
+        return subprocess.run(
+            base + list(args), capture_output=True, text=True, cwd=str(_REPO_ROOT), env=env, timeout=120
+        )
+
+    assert run("init").returncode == 0
+
+    trial_file = tmp_path / "trial.json"
+    trial_file.write_text(json.dumps({
+        "git_commit": "abc1234", "status": "discard", "baseline_metric": 1.0, "post_change_metric": 1.15,
+        "changed_components": ["optimizer"],
+        "telemetry": {"gradient_norm_mean": 1.0, "gradient_norm_std": 3.0, "val_metric": 1.15},
+    }), encoding="utf-8")
+    assert run("ingest", str(trial_file)).returncode == 0
+
+    summary = run("report", "summary")
+    assert summary.returncode == 0, summary.stderr
+    assert (tmp_path / "reports" / "summary.md").exists()
+
+    failure_map = run("report", "map")
+    assert failure_map.returncode == 0, failure_map.stderr
+    assert (tmp_path / "reports" / "failure_map.md").exists()
 
 
 # --- AC12 (active) --------------------------------------------------------------
@@ -170,10 +213,23 @@ def test_ac12_cpu_only_offline_foundation():
     assert "torch" not in sys.modules  # the package must not pull in torch
 
 
-# --- AC13 -----------------------------------------------------------------------
-@pytest.mark.skip(reason="phase 5")
-def test_ac13_disabled_means_autoresearch_unchanged():
-    ...
+# --- AC13 (active, phase 5 — part (a) automated; part (b) manual, see report) ----
+def test_ac13_disabled_means_autoresearch_unchanged(make_env):
+    from failuretrace import record_rejected_trial, render_program_md_hook
+
+    settings, repo = make_env(enabled=False)
+    # The program.md hook is absent when disabled ⇒ autoresearch never invokes FailureTrace
+    # and never imports its internals (part b: no autoresearch file is modified at all).
+    assert render_program_md_hook(settings) is None
+    # Defense in depth: the public API is a guarded no-op with zero persistence side effects.
+    result = record_rejected_trial(
+        {"git_commit": "abc", "status": "discard", "baseline_metric": 1.0},
+        {"post_change_metric": 1.1}, "diff", {"finished": True},
+        settings=settings, repository=repo,
+    )
+    assert result is None
+    assert repo.list_trials() == []
+    assert repo.list_hypotheses() == []
 
 
 # --- AC14 (active) --------------------------------------------------------------
