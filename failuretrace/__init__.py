@@ -17,6 +17,7 @@ from .core.enums import (
     TrialStatus,
 )
 from .core.ids import (
+    new_estimate_id,
     new_hypothesis_id,
     new_link_id,
     new_plan_id,
@@ -27,6 +28,7 @@ from .core.ids import (
 from .core.models import (
     CounterfactualPlan,
     CounterfactualPlanRef,
+    EffectEstimate,
     FailureHypothesis,
     Intervention,
     LinkRecord,
@@ -73,6 +75,7 @@ from .integration import (
     record_rejected_trial,
     render_program_md_hook,
 )
+from .estimation import estimate_effect, estimate_effects
 from .demo import DemoResult, run_demo
 
 __version__ = "0.1.0"
@@ -92,6 +95,7 @@ __all__ = [
     "Intervention",
     "CounterfactualPlanRef",
     "CounterfactualPlan",
+    "EffectEstimate",
     "PromotionRecord",
     "LinkRecord",
     # settings + helper
@@ -106,6 +110,7 @@ __all__ = [
     "new_plan_id",
     "new_link_id",
     "new_replication_group_id",
+    "new_estimate_id",
     # store
     "initialize_database",
     "Repository",
@@ -147,6 +152,9 @@ __all__ = [
     "promote_c4",
     "advance_promotions",
     "link_counterfactual_trial",
+    # estimation (Phase 7)
+    "estimate_effect",
+    "estimate_effects",
     # integration (autoresearch-facing public API)
     "record_rejected_trial",
     "record_from_run",

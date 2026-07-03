@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..core.models import (
     CounterfactualPlan,
+    EffectEstimate,
     FailureHypothesis,
     LinkRecord,
     PromotionRecord,
@@ -257,3 +258,33 @@ class SqliteStore:
             (hypothesis_id,),
         )
         return [CounterfactualPlan.model_validate_json(r["data"]) for r in rows]
+
+    # --- effect estimates -------------------------------------------------------
+    def insert_effect_estimate(self, rec: EffectEstimate) -> None:
+        self._insert(
+            "INSERT INTO effect_estimates (estimate_id, hypothesis_id, promotion_id, "
+            "n_counterfactuals, absolute_effect, settings_hash, data) VALUES (?,?,?,?,?,?,?)",
+            (
+                rec.estimate_id,
+                rec.hypothesis_id,
+                rec.promotion_id,
+                rec.n_counterfactuals,
+                rec.absolute_effect,
+                rec.settings_hash,
+                rec.model_dump_json(),
+            ),
+            what=f"effect estimate {rec.estimate_id}",
+        )
+
+    def get_effect_estimate(self, estimate_id: str) -> EffectEstimate | None:
+        row = self._fetchone(
+            "SELECT data FROM effect_estimates WHERE estimate_id=?", (estimate_id,)
+        )
+        return EffectEstimate.model_validate_json(row["data"]) if row else None
+
+    def list_effect_estimates_for_hypothesis(self, hypothesis_id: str) -> list[EffectEstimate]:
+        rows = self._fetchall(
+            "SELECT data FROM effect_estimates WHERE hypothesis_id=? ORDER BY estimate_id",
+            (hypothesis_id,),
+        )
+        return [EffectEstimate.model_validate_json(r["data"]) for r in rows]

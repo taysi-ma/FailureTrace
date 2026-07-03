@@ -11,8 +11,11 @@ loop with `gate`/`guidance` CLI + auto-planning, commit-based replication key, e
 replication links, physical immutability triggers, LLM-confidence provenance), and **P2**
 (CI + packaging smoke, concurrency test + atomic SQLite-first dual write with JSON
 reconcile, tightened over-regularization rule, configurable retrieval min-score cutoff,
-persisted classifier provenance, realistic-artifact adapter tests). Test suite:
-**159 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
+persisted classifier provenance, realistic-artifact adapter tests). Later extension —
+**Phase 7** (deterministic controlled effect-size estimation: magnitude + a closed-form
+interval over a hypothesis's counterfactual trials once it reaches C3; annotates the ladder
+without changing it; `effects` CLI + retrieval/guidance/report surfacing). Test suite:
+**170 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
 
 ---
 
@@ -65,6 +68,8 @@ conditions; confidence from a fixed rubric; everything runs CPU-only and offline
 - `analyst/` — `fallback.py`, `ollama_client.py`, `prompt.py`, `service.py`
 - `evidence/` — `retrieval.py`, `guidance.py`, `summaries.py`
 - `planner/` — `interventions.py`, `counterfactual.py`, `replication.py`
+- `estimation/` — `effect.py` (Phase 7: deterministic controlled effect-size + closed-form
+  interval; annotates C3+ hypotheses, persisted in the immutable `effect_estimates` table, schema v6)
 - `integration/` — `autoresearch_adapter.py` (public API + hook + adapters),
   `optimizer_adapter.py` (`SearchGuidance` producer; no Optuna)
 - `reporting/` — `summary.py`, `failure_map.py`, `trial.py`, `plots.py` (matplotlib-optional)
@@ -105,7 +110,8 @@ python -m failuretrace demo                 # or: python demo/run_demo.py
 Ingest / gate / guidance / report / record:
 ```
 python -m failuretrace ingest trial.json
-python -m failuretrace gate                  # promote replicated C1 hypotheses to C2 (writes links)
+python -m failuretrace gate                  # advance the ladder (C1->C2->C3->C4) + estimate effects
+python -m failuretrace effects               # list controlled effect sizes for C3+ hypotheses
 python -m failuretrace guidance --category likely_instability --component optimizer
 python -m failuretrace report summary       # also: failures | map | trial <trial_id>
 python -m failuretrace record --commit <hash> --status <discard|crash> \

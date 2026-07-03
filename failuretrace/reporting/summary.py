@@ -65,6 +65,7 @@ class ReportSummary(BaseModel):
     mean_hypothesis_confidence: float | None = None
     mean_evidence_quality: float | None = None
     findings_by_level: dict[str, list[str]] = Field(default_factory=dict)
+    effect_estimates: list[dict] = Field(default_factory=list)
 
 
 def build_summary(repository: Repository, settings: Settings) -> ReportSummary:
@@ -101,6 +102,16 @@ def build_summary(repository: Repository, settings: Settings) -> ReportSummary:
         elif h.category in ACTIONABLE:
             soft.append({"hypothesis_id": h.hypothesis_id, "category": h.category.value})
 
+    effect_estimates: list[dict] = []
+    for h in hyps:
+        est = repository.latest_effect_estimate(h.hypothesis_id)
+        if est is not None:
+            effect_estimates.append({
+                "hypothesis_id": h.hypothesis_id, "category": h.category.value,
+                "absolute_effect": est.absolute_effect, "ci_low": est.ci_low,
+                "ci_high": est.ci_high, "n": est.n_counterfactuals, "consistency": est.consistency,
+            })
+
     confidences = [h.hypothesis_confidence for h in hyps]
     qualities = [h.evidence_quality for h in hyps]
 
@@ -125,6 +136,7 @@ def build_summary(repository: Repository, settings: Settings) -> ReportSummary:
         mean_hypothesis_confidence=round(sum(confidences) / len(confidences), 4) if confidences else None,
         mean_evidence_quality=round(sum(qualities) / len(qualities), 4) if qualities else None,
         findings_by_level=dict(findings_by_level),
+        effect_estimates=effect_estimates,
     )
 
 
@@ -165,6 +177,19 @@ def render_summary_text(summary: ReportSummary) -> str:
         lines.append("")
     else:
         lines.append("_(none)_\n")
+
+    lines.append("## Controlled effect estimates (C3+ — magnitude of the validated effect)")
+    if summary.effect_estimates:
+        for e in summary.effect_estimates:
+            ci = (f", CI[{e['ci_low']:.3g}, {e['ci_high']:.3g}]"
+                  if e.get("ci_low") is not None else " (no interval, n=1)")
+            lines.append(
+                f"- {e['category']}: effect **{e['absolute_effect']:+.3g}**{ci} "
+                f"(n={e['n']}, consistency={e['consistency']:.2f}, hypothesis {e['hypothesis_id']})"
+            )
+        lines.append("")
+    else:
+        lines.append("_(none — no hypothesis has reached C3)_\n")
 
     lines.append("## Confidence summary")
     lines.append(f"- mean hypothesis confidence: {summary.mean_hypothesis_confidence}")

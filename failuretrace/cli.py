@@ -139,14 +139,42 @@ def _cmd_gate(args: argparse.Namespace) -> int:
     repository = Repository(settings)
     # Walk the full ladder: replication (C1->C2), counterfactual (C2->C3), C4 (C3->C4).
     result = advance_promotions(repository, settings)
-    total = sum(len(v) for v in result.values())
-    if not total:
-        print("gate: no hypothesis met a promotion threshold")
-        return 0
     labels = {"replication": "C1 -> C2", "counterfactual": "C2 -> C3", "c4": "C3 -> C4"}
     for rung, promotions in result.items():
         for p in promotions:
             print(f"gate: promoted {p.hypothesis_id} {labels[rung]} ({p.rationale})")
+    # Annotate C3+ hypotheses with controlled effect sizes (idempotent; no-op if disabled).
+    from .estimation import estimate_effects
+
+    estimates = estimate_effects(repository, settings)
+    for e in estimates:
+        ci = f" CI[{e.ci_low:.4g}, {e.ci_high:.4g}]" if e.ci_low is not None else ""
+        print(f"gate: effect for {e.hypothesis_id}: {e.absolute_effect:+.4g}{ci} (n={e.n_counterfactuals})")
+    if not sum(len(v) for v in result.values()) and not estimates:
+        print("gate: no hypothesis met a promotion threshold")
+    return 0
+
+
+def _cmd_effects(args: argparse.Namespace) -> int:
+    from .estimation import estimate_effects
+
+    settings = _build_settings(args)
+    initialize_database(settings)
+    repository = Repository(settings)
+    estimate_effects(repository, settings)  # refresh estimates (idempotent)
+
+    rows = [
+        e for e in (repository.latest_effect_estimate(h.hypothesis_id)
+                    for h in repository.list_hypotheses())
+        if e is not None
+    ]
+    if not rows:
+        print("no controlled effect estimates yet (a hypothesis must reach C3)")
+        return 0
+    for e in rows:
+        ci = f" CI[{e.ci_low:.4g}, {e.ci_high:.4g}]" if e.ci_low is not None else " (no interval, n=1)"
+        print(f"{e.hypothesis_id}: effect {e.absolute_effect:+.4g}{ci}  "
+              f"n={e.n_counterfactuals}  consistency={e.consistency:.2f}")
     return 0
 
 
@@ -240,6 +268,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "gate", help="run the replication gate: promote replicated C1 hypotheses to C2"
     ).set_defaults(func=_cmd_gate)
+
+    sub.add_parser(
+        "effects", help="estimate and list controlled effect sizes for C3+ hypotheses"
+    ).set_defaults(func=_cmd_effects)
 
     p_guidance = sub.add_parser("guidance", help="print search guidance for an intervention context")
     p_guidance.add_argument("--category", default=None, help="failure category to match (e.g. likely_instability)")

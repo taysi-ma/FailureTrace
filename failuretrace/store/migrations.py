@@ -202,6 +202,26 @@ CREATE TRIGGER IF NOT EXISTS trg_classifications_no_delete BEFORE DELETE ON clas
 BEGIN SELECT RAISE(ABORT, 'classifications are append-only / immutable'); END;
 """
 
+# v6: persist controlled effect-size estimates (Phase 7). Append-only, hypothesis-linked,
+# immutable; annotates the promotion ladder without altering it.
+_DDL_V6 = """
+CREATE TABLE effect_estimates (
+    estimate_id       TEXT PRIMARY KEY,
+    hypothesis_id     TEXT NOT NULL,
+    promotion_id      TEXT,
+    n_counterfactuals INTEGER NOT NULL,
+    absolute_effect   REAL NOT NULL,
+    settings_hash     TEXT NOT NULL,
+    data              TEXT NOT NULL,
+    FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(hypothesis_id)
+);
+CREATE INDEX IF NOT EXISTS idx_effects_hyp ON effect_estimates(hypothesis_id);
+CREATE TRIGGER IF NOT EXISTS trg_effect_estimates_no_update BEFORE UPDATE ON effect_estimates
+BEGIN SELECT RAISE(ABORT, 'effect_estimates are append-only / immutable'); END;
+CREATE TRIGGER IF NOT EXISTS trg_effect_estimates_no_delete BEFORE DELETE ON effect_estimates
+BEGIN SELECT RAISE(ABORT, 'effect_estimates are append-only / immutable'); END;
+"""
+
 # (version, ddl) applied in ascending order. Append new steps; never edit shipped ones.
 SCHEMA_STEPS: list[tuple[int, str]] = [
     (1, _DDL_V1),
@@ -209,6 +229,7 @@ SCHEMA_STEPS: list[tuple[int, str]] = [
     (3, _DDL_V3),
     (4, _DDL_V4),
     (5, _DDL_V5),
+    (6, _DDL_V6),
 ]
 
 

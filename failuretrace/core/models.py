@@ -275,3 +275,51 @@ class CounterfactualPlan(BaseModel):
                     "a coupled plan (two variables) requires a non-empty interaction_rationale"
                 )
         return self
+
+
+class EffectEstimate(BaseModel):
+    """A deterministic effect-size summary of a hypothesis's *controlled* counterfactual
+    trials (append-only; annotates a promotion, never changes the causal-support ladder).
+
+    Identification comes from the controlled design (the counterfactual plan holds every
+    other variable constant), not from statistical adjustment — so ``absolute_effect`` is
+    the mean direction-aware improvement (``> 0`` = the intervention helped) across the
+    counterfactual replicates. The interval is a closed-form normal approximation on those
+    controlled deltas (no priors, no sampling); it is present only when there are at least
+    ``min_counterfactuals_for_interval`` replicates.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    estimate_id: str
+    hypothesis_id: str
+    promotion_id: str | None = None
+    metric_name: str
+    metric_direction: MetricDirection
+    n_counterfactuals: int
+    absolute_effect: float                 # mean direction-aware improvement (>0 = better)
+    relative_effect: float | None = None   # mean improvement relative to |baseline|
+    standardized_effect: float | None = None  # absolute_effect / dispersion
+    dispersion: float | None = None        # sample std of the controlled deltas
+    ci_low: float | None = None
+    ci_high: float | None = None
+    range_low: float                       # min controlled delta (distribution-free)
+    range_high: float                      # max controlled delta
+    confidence_level: float
+    consistency: float                     # fraction of deltas agreeing with the mean's sign
+    supporting_trial_ids: list[str] = Field(default_factory=list)
+    method: str = "controlled_delta_v1"
+    settings_hash: str
+    timestamp: datetime = Field(default_factory=_utcnow)
+
+    @model_validator(mode="after")
+    def _bounds(self) -> "EffectEstimate":
+        if self.n_counterfactuals < 1:
+            raise ValueError("n_counterfactuals must be >= 1")
+        if not 0.0 <= self.confidence_level <= 1.0:
+            raise ValueError("confidence_level must be in [0, 1]")
+        if not 0.0 <= self.consistency <= 1.0:
+            raise ValueError("consistency must be in [0, 1]")
+        if (self.ci_low is None) != (self.ci_high is None):
+            raise ValueError("ci_low and ci_high must both be set or both be None")
+        return self

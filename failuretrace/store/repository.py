@@ -17,6 +17,7 @@ from ..core.enums import CausalSupportLevel
 from ..core.models import (
     DETERMINISTIC_CATEGORIES,
     CounterfactualPlan,
+    EffectEstimate,
     FailureHypothesis,
     LinkRecord,
     PromotionRecord,
@@ -265,3 +266,28 @@ class Repository:
 
     def list_plans_for_hypothesis(self, hypothesis_id: str) -> list[CounterfactualPlan]:
         return self.sqlite.list_plans_for_hypothesis(hypothesis_id)
+
+    # --- effect estimates -------------------------------------------------------
+    def save_effect_estimate(self, rec: EffectEstimate) -> EffectEstimate:
+        """Append a controlled effect-size estimate (annotation; never mutates the ladder)."""
+        if not self.sqlite.get_hypothesis(rec.hypothesis_id):
+            raise ReferentialIntegrityError(
+                f"effect estimate {rec.estimate_id} references unknown hypothesis {rec.hypothesis_id}"
+            )
+        self.sqlite.insert_effect_estimate(rec)
+        logger.info(
+            "saved effect estimate %s for hypothesis %s (effect=%.4g, n=%d)",
+            rec.estimate_id, rec.hypothesis_id, rec.absolute_effect, rec.n_counterfactuals,
+        )
+        return rec
+
+    def get_effect_estimate(self, estimate_id: str) -> EffectEstimate | None:
+        return self.sqlite.get_effect_estimate(estimate_id)
+
+    def list_effect_estimates_for_hypothesis(self, hypothesis_id: str) -> list[EffectEstimate]:
+        return self.sqlite.list_effect_estimates_for_hypothesis(hypothesis_id)
+
+    def latest_effect_estimate(self, hypothesis_id: str) -> EffectEstimate | None:
+        """The most recent estimate for a hypothesis (by timestamp), or None."""
+        estimates = self.sqlite.list_effect_estimates_for_hypothesis(hypothesis_id)
+        return max(estimates, key=lambda e: e.timestamp) if estimates else None

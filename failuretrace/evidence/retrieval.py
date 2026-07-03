@@ -153,6 +153,20 @@ def _score(
             score += contribution
             lines.append(f"repeated support ({n_promotions} promotion(s), factor={factor:.2f}): +{contribution:.2f}")
 
+    # measured controlled effect size (Phase 7). Only contributes when a hypothesis has a
+    # persisted effect estimate (C3+), so retrieval is unchanged for hypotheses without one.
+    estimate = repository.latest_effect_estimate(hyp.hypothesis_id)
+    if estimate is not None:
+        base = estimate.relative_effect if estimate.relative_effect is not None else estimate.absolute_effect
+        magnitude = max(0.0, min(1.0, abs(base)))  # scale-free, bounded
+        contribution = weights.get("effect_magnitude", 0.0) * magnitude * estimate.consistency
+        if contribution > 0:
+            score += contribution
+            lines.append(
+                f"controlled effect {estimate.absolute_effect:+.3g} "
+                f"(n={estimate.n_counterfactuals}, consistency={estimate.consistency:.2f}): +{contribution:.2f}"
+            )
+
     return score, lines
 
 

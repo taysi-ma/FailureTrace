@@ -35,3 +35,7 @@ def new_link_id() -> str:
 
 def new_replication_group_id() -> str:
     return _new("repl")
+
+
+def new_estimate_id() -> str:
+    return _new("effect")

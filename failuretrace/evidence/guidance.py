@@ -92,14 +92,25 @@ def build_guidance(
             "variable": "DEVICE_BATCH_SIZE", "reason": "prior memory pressure nearby",
         })
 
-    # C2+ (effective) evidence -> hard constraint.
+    # C2+ (effective) evidence -> hard constraint, annotated with the measured effect when
+    # a controlled estimate exists (Phase 7; additive — the entry is emitted either way).
     for rf in retrieved:
         level = repository.effective_causal_level(rf.hypothesis.hypothesis_id)
         if level is not None and level.at_least(CausalSupportLevel.C2_replicated_effect):
-            hard.append({
+            reason = f"C2+ evidence ({level.value})"
+            entry = {
                 "kind": "hard_constraint", "hypothesis_id": rf.hypothesis.hypothesis_id,
-                "category": rf.hypothesis.category.value, "reason": f"C2+ evidence ({level.value})",
-            })
+                "category": rf.hypothesis.category.value,
+            }
+            estimate = repository.latest_effect_estimate(rf.hypothesis.hypothesis_id)
+            if estimate is not None:
+                ci = (f", CI[{estimate.ci_low:.3g}, {estimate.ci_high:.3g}]"
+                      if estimate.ci_low is not None else "")
+                reason += f"; controlled effect {estimate.absolute_effect:+.3g}{ci} (n={estimate.n_counterfactuals})"
+                entry["effect"] = estimate.absolute_effect
+                entry["effect_ci"] = [estimate.ci_low, estimate.ci_high]
+            entry["reason"] = reason
+            hard.append(entry)
 
     # Inconclusive -> context only.
     inconclusive = by_category.get(FailureCategory.inconclusive, [])

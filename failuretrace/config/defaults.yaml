@@ -64,9 +64,25 @@ retrieval:
     causal_support: 2.0
     recency: 0.5
     repeated_support: 1.5
+    effect_magnitude: 2.0   # Phase 7: boosts failures with a measured controlled effect
   recency_half_life_days: 30
   log_scale_parameters: [lr, learning_rate, weight_decay]  # proximity in log-space
   # Minimum relevance for a prior failure to be returned at all. 0.0 keeps default behavior
   # (drops only exact-zero matches); raise it so weak / recency-only matches cannot pad
   # top-k and inflate downstream guidance counts.
   min_relevance_score: 0.0
+
+# --- Controlled effect-size estimation (Phase 7). Deterministic; no priors/sampling. ---
+# Summarizes the magnitude + a closed-form interval of a hypothesis's counterfactual
+# (controlled) trials once it reaches C3. Purely additive: with enabled=false nothing
+# is estimated and retrieval/guidance/reports are byte-for-byte unchanged.
+estimation:
+  enabled: true
+  confidence_level: 0.90               # must be one of the z_by_level keys below
+  min_counterfactuals_for_interval: 2  # an interval needs >= this many replicates
+  small_sample_widening: 1.0           # >=1.0 multiplier on the standard error (small-k caution)
+  z_by_level:                          # standard-normal quantiles (no scipy dependency)
+    "0.80": 1.2816
+    "0.90": 1.6449
+    "0.95": 1.9600
+    "0.99": 2.5758

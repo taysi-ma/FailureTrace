@@ -20,6 +20,11 @@ def test_demo_runs_end_to_end(make_env):
     assert result.promotion_supporting_trials >= 2
     assert result.effective_level_after_promotion == "C2_replicated_effect"
 
+    # controlled counterfactual validation pushed it to C3 with a measured effect (Phase 7)
+    assert result.level_after_counterfactual == "C3_counterfactual_supported"
+    assert result.counterfactual_effect is not None and result.counterfactual_effect > 0
+    assert result.counterfactual_n == 2
+
     # retrieval for a new intervention context, a counterfactual plan, and reports
     assert result.retrieval_hits > 0
     assert result.plan_id is not None
@@ -29,7 +34,8 @@ def test_demo_runs_end_to_end(make_env):
 
     narrative = render_demo_report(result)
     assert "end-to-end demo" in narrative
-    assert "C2_replicated_effect" in narrative
+    assert "C3_counterfactual_supported" in narrative
+    assert "controlled effect" in narrative
 
 
 def test_demo_forces_ollama_off_and_is_offline(make_env):

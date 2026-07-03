@@ -70,7 +70,7 @@ def test_t16_initialize_database_idempotent(settings):
             "SELECT version FROM schema_version ORDER BY version")]
     finally:
         conn.close()
-    assert versions == [1, 2, 3, 4, 5]  # each step applied exactly once
+    assert versions == [1, 2, 3, 4, 5, 6]  # each step applied exactly once
 
 
 # --- write-once / immutability --------------------------------------------------
