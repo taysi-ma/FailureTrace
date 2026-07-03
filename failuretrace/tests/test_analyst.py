@@ -14,6 +14,7 @@ from failuretrace.tests.fixtures.scenarios import (
     SCENARIOS,
     inconclusive_noise,
     instability,
+    missing_telemetry,
     oom_crash,
 )
 
@@ -33,8 +34,29 @@ LLM_JSON = json.dumps(
             "target_value": 0.02, "rationale": "halve LR",
         },
         "proposed_counterfactual_trial": {"summary": "halve LR, hold everything else"},
+        "category": "possible_overfitting",                       # must be ignored
         "causal_support_level": "C3_counterfactual_supported",  # must be ignored
         "should_apply_hard_constraint": True,                     # must be ignored
+    }
+)
+
+LLM_CATEGORY_JSON = json.dumps(
+    {
+        "category": "likely_undertraining",
+        "observations": ["LLM: loss was still decreasing near the budget cutoff"],
+        "evidence": ["LLM: no deterministic crash signal; compare as a plausible budget issue"],
+        "hypotheses": ["LLM: the change may need more training budget to show validation gain"],
+        "alternative_explanations": ["LLM: seed noise", "LLM: neutral change"],
+        "missing_evidence": ["LLM: no per-step validation curve"],
+        "hypothesis_confidence": 0.55,
+        "evidence_quality": 0.4,
+        "suggested_intervention": {
+            "variable": "schedule.horizon", "action": "increase",
+            "target_value": None, "rationale": "test whether more budget improves the metric",
+        },
+        "proposed_counterfactual_trial": {
+            "summary": "hold architecture and optimizer fixed; increase training budget"
+        },
     }
 )
 
@@ -131,6 +153,26 @@ def test_llm_success_enriches_hypothesis(make_env, make_trial):
     # recorded for provenance in llm_confidence, never in hypothesis_confidence (Invariant 5)
     assert hyp.hypothesis_confidence == classification.confidence
     assert hyp.llm_confidence == 0.6
+
+
+def test_llm_can_refine_unknown_category(make_env, make_trial):
+    settings, repo = make_env(ollama_enabled=True)
+    repo.save_trial(make_trial(trial_id="t_llm_category"))
+    ctx = missing_telemetry()
+    classification = classify(ctx, settings)
+    assert classification.category == FailureCategory.inconclusive
+    client = _StubClient(response_text=LLM_CATEGORY_JSON)
+    hyp = analyze(
+        classification, ctx,
+        trial_id="t_llm_category", settings=settings, client=client, repository=repo,
+    )
+    assert hyp.source == HypothesisSource.local_llm
+    assert hyp.category == FailureCategory.likely_undertraining
+    assert hyp.causal_support_level == CausalSupportLevel.C1_plausible_hypothesis
+    assert hyp.should_apply_soft_penalty is True
+    assert hyp.should_apply_hard_constraint is False
+    assert hyp.hypothesis_confidence == classification.confidence
+    assert hyp.llm_confidence == 0.55
 
 
 # --- T7: single-trial hypothesis capped at C1 even if the LLM returns C3 ---------

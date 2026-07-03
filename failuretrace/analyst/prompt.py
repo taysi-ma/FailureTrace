@@ -24,6 +24,8 @@ _INSTRUCTIONS = [
     "- Use ONLY the evidence provided below; never invent telemetry, code behavior, or results.",
     "- Never assign causal support above C1 for a single trial.",
     "- Never recommend a hard constraint unless the evidence shows deterministic repeated failure.",
+    "- If the deterministic classifier is unknown or inconclusive, choose the best FailureCategory supported by the evidence.",
+    "- If a deterministic/heuristic rule already fired, keep that category unless the evidence is explicitly invalid.",
     "- Return ONLY a JSON object matching the schema; output no prose outside the JSON.",
 ]
 
@@ -48,7 +50,7 @@ def build_prompt(
     lines: list[str] = []
     lines.extend(_INSTRUCTIONS)
     lines.append("")
-    lines.append("=== Deterministic classifier result (authoritative for category) ===")
+    lines.append("=== Deterministic classifier result (authoritative when a rule fired) ===")
     lines.append(f"category: {classification.category.value}")
     lines.append(f"confidence: {classification.confidence}")
     lines.append(f"triggered_rules: {classification.triggered_rules}")
