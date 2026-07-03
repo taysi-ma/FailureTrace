@@ -154,6 +154,14 @@ def test_record_from_run_captures_diff_and_hyperparams(make_env, tmp_path):
     assert trial.peak_vram_gb == pytest.approx(45060.2 / 1024)
     assert trial.code_diff and "train.py" in trial.code_diff        # git diff captured
     assert trial.hyperparameters.get("MATRIX_LR") == 0.08           # tunables parsed at commit
+    assert trial.telemetry["train_loss_start"] == pytest.approx(2.10)
+    assert trial.telemetry["train_loss_end"] == pytest.approx(2.10)
+    assert trial.telemetry["learning_rate_history"] == [0.02]
+    assert trial.telemetry["step_throughput_mean"] == pytest.approx(1.6e6)
+    assert trial.telemetry["step_mfu_mean"] == pytest.approx(39.8)
+    assert trial.telemetry["num_steps"] == 953
+    assert trial.telemetry["num_params_m"] == pytest.approx(50.3)
+    assert trial.telemetry["depth"] == 8
 
 
 def test_record_from_run_sets_config_hash_and_parent_lineage(make_env, tmp_path):

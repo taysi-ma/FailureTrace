@@ -36,12 +36,26 @@ class TelemetryRecord(BaseModel):
     peak_vram_gb: float | None = None
     gpu_memory_ratio: float | None = None
     throughput: float | None = None
+    step_throughput_mean: float | None = None
+    step_throughput_min: float | None = None
+    step_throughput_max: float | None = None
+    mfu_percent: float | None = None
+    step_mfu_mean: float | None = None
+    step_mfu_min: float | None = None
+    step_mfu_max: float | None = None
     runtime_seconds: float | None = None
 
     # schedules / summaries
     learning_rate_history: list[float] | None = None
     train_val_gap: float | None = None
     parameter_norm_summary: dict[str, float] | None = None
+
+    # run metadata emitted by autoresearch's final summary block
+    total_seconds: float | None = None
+    total_tokens_m: float | None = None
+    num_steps: int | None = None
+    num_params_m: float | None = None
+    depth: int | None = None
 
     @model_validator(mode="before")
     @classmethod

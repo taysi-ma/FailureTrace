@@ -31,6 +31,25 @@ step 00010 (1.0%) | loss: nan | ...
 FAIL
 """
 
+PROGRESS_LOG = (
+    "step 00001 (0.1%) | loss: 4.000000 | lrm: 0.10 | dt: 310ms | "
+    "tok/sec: 1,500,000 | mfu: 35.0% | epoch: 0 | remaining: 299s\r"
+    "step 00002 (0.2%) | loss: 3.500000 | lrm: 0.20 | dt: 300ms | "
+    "tok/sec: 1,600,000 | mfu: 39.0% | epoch: 0 | remaining: 298s\r"
+    "step 00003 (0.3%) | loss: 3.800000 | lrm: 0.30 | dt: 290ms | "
+    "tok/sec: 1,700,000 | mfu: 41.0% | epoch: 0 | remaining: 297s\n"
+    "---\n"
+    "val_bpb:          1.010000\n"
+    "training_seconds: 300.0\n"
+    "total_seconds:    320.0\n"
+    "peak_vram_mb:     40960.0\n"
+    "mfu_percent:      40.00\n"
+    "total_tokens_M:   500.0\n"
+    "num_steps:        3\n"
+    "num_params_M:     51.5\n"
+    "depth:            9\n"
+)
+
 
 def test_all_fields_optional():
     rec = TelemetryRecord()
@@ -64,6 +83,35 @@ def test_parse_run_log_success_summary():
     assert tel.peak_vram_gb == 45056.0 / 1024  # == 44.0
     assert tel.throughput == 499.6 * 1e6 / 300.1
     assert tel.nan_detected is None
+    assert tel.mfu_percent == 39.80
+    assert tel.total_seconds == 325.9
+    assert tel.total_tokens_m == 499.6
+    assert tel.num_steps == 953
+    assert tel.num_params_m == 50.3
+    assert tel.depth == 8
+    assert tel.train_loss_start == 0.997900
+    assert tel.train_loss_end == 0.997900
+    assert tel.learning_rate_history == [0.0]
+    assert tel.step_throughput_mean == 1_600_000
+    assert tel.step_mfu_mean == 39.8
+
+
+def test_parse_run_log_progress_carriage_returns():
+    result = parse_run_log(PROGRESS_LOG)
+    tel = result.telemetry
+    assert tel.train_loss_start == 4.0
+    assert tel.train_loss_end == 3.8
+    assert tel.loss_spike_count == 1
+    assert tel.learning_rate_history == [0.1, 0.2, 0.3]
+    assert tel.step_throughput_min == 1_500_000
+    assert tel.step_throughput_mean == 1_600_000
+    assert tel.step_throughput_max == 1_700_000
+    assert tel.step_mfu_min == 35.0
+    assert tel.step_mfu_mean == 115.0 / 3.0
+    assert tel.step_mfu_max == 41.0
+    assert tel.num_steps == 3
+    assert tel.num_params_m == 51.5
+    assert tel.depth == 9
 
 
 def test_parse_run_log_oom_traceback():
