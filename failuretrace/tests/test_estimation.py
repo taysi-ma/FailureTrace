@@ -35,9 +35,9 @@ def _regress_post(direction):
     return 1.15 if direction == _MIN else 0.85
 
 
-def _improve_post(direction, amount):
-    """A post that improves by ``amount`` under ``direction`` (baseline 1.0)."""
-    return 1.0 - amount if direction == _MIN else 1.0 + amount
+def _improve_post(direction, amount, baseline=1.0):
+    """A post that improves by ``amount`` under ``direction`` (given ``baseline``)."""
+    return baseline - amount if direction == _MIN else baseline + amount
 
 
 def _src_ctx(direction):
@@ -46,9 +46,9 @@ def _src_ctx(direction):
     return instability(metric_direction=_MAX, baseline_metric=1.0, post_change_metric=_regress_post(_MAX))
 
 
-def _c1(repo, settings, make_trial, direction=_MIN, *, seed=42):
+def _c1(repo, settings, make_trial, direction=_MIN, *, seed=42, tag=""):
     trial = make_trial(
-        trial_id="src", seed=seed, changed_components=["optimizer"],
+        trial_id=f"{tag}src", seed=seed, changed_components=["optimizer"],
         hyperparameters={"MATRIX_LR": 0.08}, metric_direction=direction,
         baseline_metric=1.0, post_change_metric=_regress_post(direction),
     )
@@ -59,39 +59,42 @@ def _c1(repo, settings, make_trial, direction=_MIN, *, seed=42):
     return trial, hyp
 
 
-def _to_c2(repo, settings, make_trial, hyp, direction=_MIN):
+def _to_c2(repo, settings, make_trial, hyp, direction=_MIN, *, tag=""):
     evidence = []
     for s in (1, 2):
         t = make_trial(
-            trial_id=f"rep{s}", seed=s, changed_components=["optimizer"],
+            trial_id=f"{tag}rep{s}", seed=s, changed_components=["optimizer"],
             hyperparameters={"MATRIX_LR": 0.08}, metric_direction=direction,
             baseline_metric=1.0, post_change_metric=_regress_post(direction),
         )
         repo.save_trial(t)
         evidence.append(ReplicationEvidence(trial_id=t.trial_id, seed=s))
     repo.save_promotion(evaluate_replication(
-        hyp.hypothesis_id, evidence, settings=settings, repository=repo, replication_group_id="g",
+        hyp.hypothesis_id, evidence, settings=settings, repository=repo, replication_group_id=f"{tag}g",
     ))
 
 
-def _to_c3(repo, settings, make_trial, hyp, improvements, direction=_MIN):
-    """``improvements``: list of (trial_id, amount) — each a counterfactual trial that
-    improves by ``amount`` under ``direction`` and is linked to the hypothesis."""
+def _to_c3(repo, settings, make_trial, hyp, improvements, direction=_MIN, *, tag=""):
+    """``improvements``: list of (trial_id, amount[, baseline]) — each a counterfactual trial
+    that improves by ``amount`` under ``direction`` (baseline defaults to 1.0)."""
     repo.save_plan(plan_counterfactual(hyp, settings=settings))
-    for tid, amount in improvements:
+    for entry in improvements:
+        tid, amount = entry[0], entry[1]
+        baseline = entry[2] if len(entry) > 2 else 1.0
         t = make_trial(
-            trial_id=tid, changed_components=["optimizer"], hyperparameters={"MATRIX_LR": 0.04},
-            metric_direction=direction, baseline_metric=1.0, post_change_metric=_improve_post(direction, amount),
+            trial_id=f"{tag}{tid}", changed_components=["optimizer"], hyperparameters={"MATRIX_LR": 0.04},
+            metric_direction=direction, baseline_metric=baseline,
+            post_change_metric=_improve_post(direction, amount, baseline),
         )
         repo.save_trial(t)
         link_counterfactual_trial(repo, settings, hypothesis_id=hyp.hypothesis_id, counterfactual_trial_id=t.trial_id)
     promote_counterfactuals(repo, settings)
 
 
-def _full_c3(repo, settings, make_trial, improvements=(("cf1", 0.1), ("cf2", 0.2)), direction=_MIN):
-    _, hyp = _c1(repo, settings, make_trial, direction)
-    _to_c2(repo, settings, make_trial, hyp, direction)
-    _to_c3(repo, settings, make_trial, hyp, list(improvements), direction)
+def _full_c3(repo, settings, make_trial, improvements=(("cf1", 0.1), ("cf2", 0.2)), direction=_MIN, *, tag=""):
+    _, hyp = _c1(repo, settings, make_trial, direction, tag=tag)
+    _to_c2(repo, settings, make_trial, hyp, direction, tag=tag)
+    _to_c3(repo, settings, make_trial, hyp, list(improvements), direction, tag=tag)
     assert repo.effective_causal_level(hyp.hypothesis_id) == _C3
     return hyp
 
@@ -168,6 +171,37 @@ def test_estimate_effects_driver_is_idempotent(repo, settings, make_trial):
     assert estimate_effects(repo, settings) == []  # same evidence => nothing new
     assert len(repo.list_effect_estimates_for_hypothesis(hyp.hypothesis_id)) == 1
     assert repo.latest_effect_estimate(hyp.hypothesis_id).absolute_effect == pytest.approx(0.15)
+
+
+# --- interval widens with dispersion (monotonicity) -----------------------------
+def test_ci_widens_with_dispersion(repo, settings, make_trial):
+    tight = estimate_effect(
+        _full_c3(repo, settings, make_trial, improvements=(("cf1", 0.10), ("cf2", 0.12)), tag="a").hypothesis_id,
+        settings=settings, repository=repo,
+    )
+    wide = estimate_effect(
+        _full_c3(repo, settings, make_trial, improvements=(("cf1", 0.10), ("cf2", 0.40)), tag="b").hypothesis_id,
+        settings=settings, repository=repo,
+    )
+    assert (wide.ci_high - wide.ci_low) > (tight.ci_high - tight.ci_low)
+
+
+# --- zero spread => dispersion 0, standardized undefined, no interval -----------
+def test_identical_deltas_have_zero_dispersion_and_no_interval(repo, settings, make_trial):
+    hyp = _full_c3(repo, settings, make_trial, improvements=(("cf1", 0.1), ("cf2", 0.1)))
+    est = estimate_effect(hyp.hypothesis_id, settings=settings, repository=repo)
+    assert est.absolute_effect == pytest.approx(0.1)
+    assert est.dispersion == 0.0
+    assert est.standardized_effect is None
+    assert est.ci_low is None and est.ci_high is None
+
+
+# --- relative effect guards a near-zero baseline (no div-by-zero) ----------------
+def test_zero_baseline_skips_relative_effect(repo, settings, make_trial):
+    hyp = _full_c3(repo, settings, make_trial, improvements=(("cf1", 0.1, 0.0), ("cf2", 0.2, 0.0)))
+    est = estimate_effect(hyp.hypothesis_id, settings=settings, repository=repo)
+    assert est.absolute_effect == pytest.approx(0.15)  # absolute still computed
+    assert est.relative_effect is None                  # baseline 0 -> relative skipped
 
 
 # --- the estimate feeds retrieval (additive, explained) -------------------------
