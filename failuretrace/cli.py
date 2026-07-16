@@ -140,17 +140,17 @@ def _cmd_gate(args: argparse.Namespace) -> int:
     # Walk the full ladder: replication (C1->C2), counterfactual (C2->C3), C4 (C3->C4).
     result = advance_promotions(repository, settings)
     labels = {"replication": "C1 -> C2", "counterfactual": "C2 -> C3", "c4": "C3 -> C4"}
-    for rung, promotions in result.items():
-        for p in promotions:
-            print(f"gate: promoted {p.hypothesis_id} {labels[rung]} ({p.rationale})")
-    # Annotate C3+ hypotheses with controlled effect sizes (idempotent; no-op if disabled).
-    from .estimation import estimate_effects
-
-    estimates = estimate_effects(repository, settings)
+    promoted = 0
+    for rung, label in labels.items():
+        for p in result.get(rung, []):
+            promoted += 1
+            print(f"gate: promoted {p.hypothesis_id} {label} ({p.rationale})")
+    # advance_promotions also estimates controlled effect sizes for C3+ hypotheses.
+    estimates = result.get("effects", [])
     for e in estimates:
         ci = f" CI[{e.ci_low:.4g}, {e.ci_high:.4g}]" if e.ci_low is not None else ""
         print(f"gate: effect for {e.hypothesis_id}: {e.absolute_effect:+.4g}{ci} (n={e.n_counterfactuals})")
-    if not sum(len(v) for v in result.values()) and not estimates:
+    if not promoted and not estimates:
         print("gate: no hypothesis met a promotion threshold")
     return 0
 

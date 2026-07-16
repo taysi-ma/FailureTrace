@@ -350,14 +350,23 @@ def promote_c4(repository: Repository, settings: Settings) -> list[PromotionReco
     return promotions
 
 
-def advance_promotions(repository: Repository, settings: Settings) -> dict[str, list[PromotionRecord]]:
+def advance_promotions(repository: Repository, settings: Settings) -> dict[str, list]:
     """Run the full promotion ladder in order — replication (C1->C2), counterfactual
     (C2->C3), then C4 (C3->C4) — so a hypothesis with sufficient accumulated evidence can
-    climb multiple rungs in one pass. Each rung is individually idempotent."""
+    climb multiple rungs in one pass, then estimate controlled effect sizes for any
+    hypothesis now at C3+.
+
+    Each step is individually idempotent. The ``effects`` value holds any newly-written
+    ``EffectEstimate``s (empty when estimation is disabled or nothing changed) — it is the
+    only non-``PromotionRecord`` value, so callers that count promotions must select the
+    ``replication``/``counterfactual``/``c4`` keys explicitly."""
+    from ..estimation.effect import estimate_effects  # local import: avoid an import cycle
+
     return {
         "replication": promote_replications(repository, settings),
         "counterfactual": promote_counterfactuals(repository, settings),
         "c4": promote_c4(repository, settings),
+        "effects": estimate_effects(repository, settings),
     }
 
 

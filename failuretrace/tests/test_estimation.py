@@ -204,6 +204,19 @@ def test_zero_baseline_skips_relative_effect(repo, settings, make_trial):
     assert est.relative_effect is None                  # baseline 0 -> relative skipped
 
 
+# --- advance_promotions estimates effects as its final step ---------------------
+def test_advance_promotions_estimates_effects(repo, settings, make_trial):
+    from failuretrace.planner import advance_promotions
+
+    hyp = _full_c3(repo, settings, make_trial)  # at C3, but no estimate written yet
+    result = advance_promotions(repo, settings)
+    assert "effects" in result
+    assert any(e.hypothesis_id == hyp.hypothesis_id for e in result["effects"])
+    # promotion rungs are exhausted, and a second pass writes no new estimate (idempotent)
+    second = advance_promotions(repo, settings)
+    assert not any(second[k] for k in ("replication", "counterfactual", "c4", "effects"))
+
+
 # --- the estimate feeds retrieval (additive, explained) -------------------------
 def test_effect_boosts_and_explains_retrieval(repo, settings, make_trial):
     from failuretrace import InterventionContext, retrieve_relevant_failures
