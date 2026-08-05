@@ -2,6 +2,15 @@ name: ci
 
 # Provider-free, CPU-only, offline test suite. No GPU, no Ollama, no network services
 # are required — every test runs deterministically on a stock runner.
+#
+# One Python version, one locked dependency set: the development venv. `.python-version`
+# and `requirements-ci.txt` are the single source of truth for both, so a green run means
+# the code works in the environment it is actually developed in. Testing a matrix of
+# interpreters against whatever pip resolved that morning tested neither.
+#
+# Action majors must stay on a supported Node runtime. checkout@v4 / setup-python@v5
+# declare node20, which reached end-of-life in April 2026; keep these on the current
+# major (node24) rather than letting them rot.
 on:
   push:
     branches: [main]
@@ -11,32 +20,41 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - name: Set up Python (from .python-version)
+        uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install (with extras)
-        run: pip install -e ".[analysis,ollama,dev]"
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - name: Install the locked environment
+        # The lock is installed first and the package with --no-deps, so pip never
+        # re-resolves a pinned version away.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci.txt
+          python -m pip install -e . --no-deps
+      - name: Check the lock still satisfies pyproject
+        # Fails if a dependency was added to pyproject.toml without being added to
+        # requirements-ci.txt, which --no-deps would otherwise hide.
+        run: python -m pip check
       - name: Run test suite (CPU-only, offline)
-        run: pytest -q
+        run: python -m pytest -q
 
   packaging-smoke:
-    # The package must be usable once installed, from any working directory — guards the
-    # "No module named failuretrace" trap of running it uninstalled outside the repo root.
+    # Deliberately NOT locked: this job is the "does a fresh install still work" guard, so
+    # it resolves pyproject's ranges the way a new user would. It also checks the package
+    # is usable from any working directory — the "No module named failuretrace" trap of
+    # running it uninstalled outside the repo root.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version-file: .python-version
       - name: Install core only (minimal, provider-free)
-        run: pip install -e .
+        run: python -m pip install -e .
       - name: Run the CLI from a different directory
         run: |
           cd "$RUNNER_TEMP"

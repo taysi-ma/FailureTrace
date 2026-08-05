@@ -1,0 +1,55 @@
+# Locked test environment — this file IS the venv CI runs in.
+#
+# Why a lock and not the pyproject ranges: `pip install -e ".[analysis,ollama,dev]"`
+# resolves the open ranges (`pandas>=2`, `pytest>=8`, ...) to whatever is newest on the
+# day CI happens to run. That silently drifted the runner onto pandas 3.x / numpy 2.5 /
+# pytest 9.x while the development venv sits on pandas 2.2.3 / pytest 8.3.4 — CI was
+# testing a different environment than anyone develops against. Everything here is
+# pinned so a green run means green on the venv, not on an unreviewed upgrade.
+#
+# Direct dependencies are pinned to the development venv's versions. Transitive pins are
+# the resolution of those on CPython 3.13 (see .python-version), captured on linux so the
+# file is installable on the runner as well as locally.
+#
+# NOTE: numpy is the one dependency that cannot match the dev venv. That venv has numpy
+# 1.26.4 from conda; 1.26.4 publishes no CPython 3.13 wheels to PyPI (pip offers >=2.1.0
+# only), so pip-based CI cannot reproduce it. 2.5.1 is the resolved pin, and pandas 2.2.3
+# supports numpy 2.x.
+#
+# To regenerate after changing a dependency:
+#   python -m venv .venv && .venv/bin/pip install -e ".[analysis,ollama,dev]"
+#   .venv/bin/pip freeze | grep -v '^-e \|^failuretrace' > requirements-ci.txt
+# then re-add this header and review the diff — an unintended major bump should be a
+# deliberate, reviewed change, which is the whole point of the file.
+
+# --- direct (declared in pyproject.toml) ---
+pydantic==2.11.5
+PyYAML==6.0.2
+pandas==2.2.3
+matplotlib==3.10.3
+pytest==8.3.4
+requests==2.32.3
+
+# --- transitive ---
+annotated-types==0.8.0
+certifi==2026.7.22
+charset-normalizer==3.4.9
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.63.0
+idna==3.18
+iniconfig==2.3.0
+kiwisolver==1.5.0
+numpy==2.5.1
+packaging==26.3
+pillow==12.3.0
+pluggy==1.6.0
+pydantic-core==2.33.2
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+six==1.17.0
+typing-extensions==4.16.0
+typing-inspection==0.4.2
+tzdata==2026.3
+urllib3==2.7.0
