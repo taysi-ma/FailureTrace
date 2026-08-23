@@ -70,6 +70,32 @@ or alters the keep/reset decision.
 """
 
 
+_CONSULT_TEMPLATE = """<!-- failuretrace:consult:begin (present only when failuretrace.enabled) -->
+### Optional: consult prior failures before running (FailureTrace)
+
+After editing `train.py` (step 2) and BEFORE `git commit` and the training run, check what
+previous rejected trials say about this change:
+
+```
+python -m failuretrace brief --infer-from {repo}
+```
+
+This infers which tunables you changed by diffing the working tree against `HEAD`, then
+prints the ranked prior failures for that change. How to read it:
+
+- **Binding constraints** — backed by replicated (C2+) or repeated deterministic evidence.
+  Treat these as forbidden regions; pick a different change.
+- **Advisory** — a soft penalty. Prefer an alternative, but proceed if you have a reason.
+- **Plausible hypotheses (C0/C1)** — single-trial observations, NOT causally validated.
+  Context only. Do not treat them as established facts, and do not let them stop you
+  from testing an idea.
+
+This command only reads; it never edits `train.py`, changes the metric, or alters the
+keep/reset decision.
+<!-- failuretrace:consult:end -->
+"""
+
+
 def render_program_md_hook(settings: Settings, *, branch: str = "autoresearch/<tag>") -> str | None:
     """The flag-guarded ``program.md`` snippet, or ``None`` when disabled.
 
@@ -78,6 +104,19 @@ def render_program_md_hook(settings: Settings, *, branch: str = "autoresearch/<t
     if not settings.enabled:
         return None
     return _HOOK_TEMPLATE.format(branch=branch)
+
+
+def render_program_md_consult_hook(settings: Settings, *, repo: str = ".") -> str | None:
+    """The read-path counterpart to :func:`render_program_md_hook`.
+
+    The record hook closes the write half of the loop (a rejection becomes stored
+    evidence); this one closes the read half (stored evidence reaches the agent before
+    it commits to the next experiment). Same flag discipline: ``None`` when disabled, so
+    autoresearch never learns FailureTrace exists (AC13).
+    """
+    if not settings.enabled:
+        return None
+    return _CONSULT_TEMPLATE.format(repo=repo)
 
 
 # Word-boundary OOM detection (avoids false positives like "boom" containing "oom").
@@ -289,6 +328,50 @@ def _parse_tunables(source: str) -> dict[str, Any]:
         except (ValueError, SyntaxError):
             found[name] = rhs
     return found
+
+
+# --- pre-experiment inference (CLI `brief --infer-from`) ------------------------
+def load_component_map(settings: Settings) -> dict[str, str]:
+    """Invert the config's ``component -> [knobs]`` mapping into ``knob -> component``."""
+    mapping: dict[str, str] = {}
+    for component, names in settings.section("components").items():
+        if isinstance(names, (list, tuple)):
+            for name in names:
+                mapping[str(name)] = str(component)
+    return mapping
+
+
+def components_for(tunable_names: Any, settings: Settings) -> list[str]:
+    """The distinct components a set of tunable names belongs to (sorted, deduped)."""
+    mapping = load_component_map(settings)
+    return sorted({mapping[str(name)] for name in tunable_names if str(name) in mapping})
+
+
+def infer_changed_tunables(
+    repo_path: str | Path = ".",
+    *,
+    ref: str = "HEAD",
+    train_py: str = "train.py",
+) -> dict[str, Any]:
+    """Tunables whose value differs between the working tree and ``ref``.
+
+    This is the pre-experiment counterpart to :func:`record_from_run`: the agent has
+    edited ``train.py`` but not yet committed, so the change is the working tree against
+    ``HEAD``. Returns an empty mapping when the file or the git ref is unavailable —
+    the caller reports that rather than guessing what changed.
+    """
+    working = Path(repo_path) / train_py
+    if not working.is_file():
+        logger.warning("cannot infer changes: %s does not exist", working)
+        return {}
+    ref_source = _git(str(repo_path), "show", f"{ref}:{train_py}")
+    if ref_source is None:
+        logger.warning("cannot infer changes: unable to read %s:%s", ref, train_py)
+        return {}
+
+    current = _parse_tunables(working.read_text(encoding="utf-8"))
+    baseline = _parse_tunables(ref_source)
+    return {name: value for name, value in current.items() if baseline.get(name) != value}
 
 
 def record_from_run(

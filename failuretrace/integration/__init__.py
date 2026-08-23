@@ -7,9 +7,13 @@ See ``docs/failuretrace_integration_report.md``.
 """
 
 from .autoresearch_adapter import (
+    components_for,
+    infer_changed_tunables,
     ingest_results_tsv,
+    load_component_map,
     record_from_run,
     record_rejected_trial,
+    render_program_md_consult_hook,
     render_program_md_hook,
 )
 from .optimizer_adapter import guidance_for, soft_penalty_terms
@@ -18,7 +22,11 @@ __all__ = [
     "record_rejected_trial",
     "record_from_run",
     "render_program_md_hook",
+    "render_program_md_consult_hook",
     "ingest_results_tsv",
+    "infer_changed_tunables",
+    "components_for",
+    "load_component_map",
     "guidance_for",
     "soft_penalty_terms",
 ]
