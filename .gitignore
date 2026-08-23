@@ -33,3 +33,7 @@ failuretrace/reports/
 
 # Testing
 .pytest_cache/
+
+# matplotlib font cache, pinned here by failuretrace/tests/conftest.py so the suite does
+# not depend on a writable HOME
+.mplcache/

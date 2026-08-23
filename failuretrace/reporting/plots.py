@@ -13,13 +13,31 @@ logger = logging.getLogger(__name__)
 
 HAS_MATPLOTLIB = importlib.util.find_spec("matplotlib") is not None
 
+# Set once pyplot has been proven unimportable in this process. A failed import is not
+# cached by Python, so without this every plot call would repeat the work — and that work
+# includes building the font cache, which on some systems takes minutes and can fail
+# (e.g. matplotlib's macOS font query raises KeyError when system_profiler returns an
+# unexpected plist). Degrading once is the intent; degrading once per figure is a hang.
+_pyplot_unavailable = False
+
 
 def _pyplot():
-    import matplotlib
+    """Return the ``Agg``-backed pyplot module, or ``None`` if it cannot be imported."""
+    global _pyplot_unavailable
+    if _pyplot_unavailable:
+        return None
+    try:
+        import matplotlib
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception as exc:  # noqa: BLE001 - an unusable matplotlib is not an error here
+        _pyplot_unavailable = True
+        logger.warning(
+            "matplotlib is installed but unusable (%s: %s); plots will be skipped",
+            exc.__class__.__name__, exc,
+        )
+        return None
     return plt
 
 
@@ -27,8 +45,10 @@ def bar_plot(counts: dict[str, float], title: str, path: str | Path) -> Path | N
     """Save a labeled bar chart of ``counts``; ``None`` if matplotlib absent / no data."""
     if not HAS_MATPLOTLIB or not counts:
         return None
+    plt = _pyplot()
+    if plt is None:
+        return None
     try:
-        plt = _pyplot()
         keys = list(counts)
         values = [counts[k] for k in keys]
         fig, ax = plt.subplots(figsize=(6, 4))
@@ -57,8 +77,10 @@ def scatter_plot(
     """Save a scatter of ``(x, y, group)`` points colored by group; ``None`` if unavailable."""
     if not HAS_MATPLOTLIB or not points:
         return None
+    plt = _pyplot()
+    if plt is None:
+        return None
     try:
-        plt = _pyplot()
         fig, ax = plt.subplots(figsize=(6, 4))
         groups = sorted({label for _, _, label in points})
         cmap = plt.get_cmap("tab10")

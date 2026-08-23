@@ -7,7 +7,9 @@ isolated from any ambient ``FAILURETRACE_DATA_DIR``.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +28,16 @@ from failuretrace import (
     load_settings,
 )
 from failuretrace.core.ids import new_hypothesis_id, new_trial_id
+
+# matplotlib builds a font cache the first time pyplot is imported and persists it in
+# MPLCONFIGDIR, which defaults to the user's home directory. Where HOME is not writable
+# (sandboxes, containers, hardened CI images) the cache can never be persisted, so every
+# process rebuilds it from scratch — and the CLI tests pay that cost once per subprocess.
+# Pinning it inside the repo makes the suite self-contained: built once, reused, and
+# inherited by the subprocesses the CLI tests spawn. An ambient value always wins.
+os.environ.setdefault(
+    "MPLCONFIGDIR", str(Path(__file__).resolve().parents[2] / ".mplcache")
+)
 
 _FIXED_TS = datetime(2026, 3, 5, 12, 0, 0, tzinfo=timezone.utc)
 
