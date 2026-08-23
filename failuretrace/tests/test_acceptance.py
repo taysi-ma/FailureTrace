@@ -217,12 +217,19 @@ def test_ac12_cpu_only_offline_foundation():
 
 # --- AC13 (active, phase 5 — part (a) automated; part (b) manual, see report) ----
 def test_ac13_disabled_means_autoresearch_unchanged(make_env):
-    from failuretrace import record_rejected_trial, render_program_md_hook
+    from failuretrace import (
+        record_rejected_trial,
+        render_program_md_consult_hook,
+        render_program_md_hook,
+    )
 
     settings, repo = make_env(enabled=False)
-    # The program.md hook is absent when disabled ⇒ autoresearch never invokes FailureTrace
+    # The program.md hooks are absent when disabled ⇒ autoresearch never invokes FailureTrace
     # and never imports its internals (part b: no autoresearch file is modified at all).
+    # BOTH directions must be absent: the record hook (write path) and the Phase-8 consult
+    # hook (read path), since either one would otherwise change the agent's instructions.
     assert render_program_md_hook(settings) is None
+    assert render_program_md_consult_hook(settings) is None
     # Defense in depth: the public API is a guarded no-op with zero persistence side effects.
     result = record_rejected_trial(
         {"git_commit": "abc", "status": "discard", "baseline_metric": 1.0},

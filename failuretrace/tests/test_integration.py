@@ -9,8 +9,11 @@ import pytest
 
 from failuretrace import (
     InterventionContext,
+    components_for,
+    infer_changed_tunables,
     record_from_run,
     record_rejected_trial,
+    render_program_md_consult_hook,
     render_program_md_hook,
 )
 from failuretrace.core.enums import FailureCategory, TrialStatus
@@ -318,3 +321,53 @@ def test_guidance_for_produces_search_guidance(make_env):
     assert guidance.soft_penalties
     terms = soft_penalty_terms(guidance)
     assert terms  # variable -> penalty flattening for a future optimizer
+
+
+# --- Phase 8: pre-experiment inference + the consult hook -----------------------
+def _make_repo_with_uncommitted_edit(root: Path) -> None:
+    """A committed baseline plus an *uncommitted* train.py edit — the state the agent is
+    in when it should consult the brief (edited, not yet committed)."""
+    root.mkdir(parents=True, exist_ok=True)
+    _git(root, "init", "-q")
+    (root / "train.py").write_text(_TRAIN_PY_BASE, encoding="utf-8")
+    _git(root, "add", "train.py")
+    _git(root, "commit", "-q", "-m", "baseline")
+    (root / "train.py").write_text(_TRAIN_PY_EXP, encoding="utf-8")
+
+
+def test_infer_changed_tunables_detects_working_tree_edit(tmp_path):
+    root = tmp_path / "autoresearch"
+    _make_repo_with_uncommitted_edit(root)
+    changed = infer_changed_tunables(root)
+    # only the knob that actually moved; unchanged knobs must not be reported
+    assert changed == {"MATRIX_LR": 0.08}
+
+
+def test_infer_changed_tunables_is_empty_without_git_or_file(tmp_path):
+    assert infer_changed_tunables(tmp_path / "nonexistent") == {}
+    bare = tmp_path / "no_git"
+    bare.mkdir()
+    (bare / "train.py").write_text(_TRAIN_PY_EXP, encoding="utf-8")
+    assert infer_changed_tunables(bare) == {}  # no ref to diff against => no guess
+
+
+def test_components_for_maps_tunables_via_config(make_env):
+    settings, _ = make_env(ollama_enabled=False)
+    assert components_for(["MATRIX_LR"], settings) == ["optimizer"]
+    assert components_for(["DEVICE_BATCH_SIZE", "DEPTH"], settings) == ["batch", "model"]
+    assert components_for(["NOT_A_KNOB"], settings) == []
+
+
+def test_consult_hook_renders_when_enabled(make_env):
+    settings, _ = make_env(ollama_enabled=False)
+    hook = render_program_md_consult_hook(settings, repo=".")
+    assert hook is not None
+    assert "failuretrace brief --infer-from ." in hook
+    # the hook must state the epistemic contract, not just the command
+    assert "NOT causally validated" in hook
+
+
+def test_consult_hook_absent_when_disabled(make_env):
+    settings, _ = make_env(ollama_enabled=False, enabled=False)
+    assert render_program_md_consult_hook(settings) is None
+    assert render_program_md_hook(settings) is None
