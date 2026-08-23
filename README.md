@@ -206,9 +206,18 @@ Installed as `failuretrace` (also runnable as `python -m failuretrace`).
 | `failuretrace ingest <trial.json>` | Ingest a synthetic/demo trial JSON |
 | `failuretrace record --commit … --status discard\|crash\|keep --run-log run.log [--repo … --branch … --baseline-metric … --seed …]` | Record a live run from its artifacts |
 | `failuretrace gate` | Run the promotion ladder (C1→C2→C3→C4) over accumulated evidence |
-| `failuretrace guidance --category <cat> --component <c> [--top-k N]` | Print search guidance for a planned intervention |
+| `failuretrace brief [--infer-from <repo>] [--category <cat>] [--component <c>] [--param NAME=VALUE] [--format markdown\|text\|json]` | Bounded prior-failure evidence for the experiment **about to run** |
+| `failuretrace guidance [--category <cat>] [--component <c>] [--param NAME=VALUE] [--top-k N]` | Print raw search guidance for a planned intervention |
 | `failuretrace report summary\|failures\|map` | Write and print a governance report |
 | `failuretrace report trial <trial_id>` | Write and print a per-trial report |
+
+`brief` is the read half of the loop. `--infer-from <repo>` recovers which `train.py`
+tunables you changed by diffing the working tree against `HEAD`, so the agent does not
+have to describe its own edit; `--param`/`--component` state it explicitly instead. Output
+separates **binding constraints** (C2+ or repeated deterministic failure) from **advisory**
+soft penalties from **C0/C1 context**, which is labeled *NOT causally validated*, and is
+bounded by `brief.max_items` / `brief.max_chars` so long runs cannot flood the agent's
+context.
 
 Global options (before the subcommand): `--config <yaml>`, `--data-dir`,
 `--reports-dir`, `--no-ollama` (force the fully deterministic/offline path).
@@ -219,8 +228,8 @@ Everything below is re-exported from the top-level `failuretrace` package.
 
 ```python
 from failuretrace import (
-    InterventionContext, Repository, advance_promotions, guidance_for,
-    initialize_database, load_settings, record_rejected_trial,
+    InterventionContext, Repository, advance_promotions, brief_for, guidance_for,
+    initialize_database, load_settings, record_rejected_trial, render_brief,
     retrieve_relevant_failures,
 )
 
@@ -252,6 +261,10 @@ for failure in retrieve_relevant_failures(context, repository=repository, settin
 
 guidance = guidance_for(context, settings=settings, repository=repository)
 # guidance.soft_penalties / .hard_constraints / .warnings / .relevant_failure_hypotheses
+
+# 2b. Or get it prompt-ready: bounded, and sectioned so C0/C1 is never stated as causal.
+brief = brief_for(context, settings=settings, repository=repository)
+print(render_brief(brief, fmt="markdown", settings=settings))
 
 # 3. Promote hypotheses whose accumulated evidence now clears a gate.
 promotions = advance_promotions(repository, settings)   # {"replication": [...], ...}
@@ -382,11 +395,14 @@ matplotlib is installed.
 
 ```bash
 pip install -e ".[analysis,ollama,dev]"
-pytest            # 161 passed — CPU-only, offline, no Ollama required
+pytest            # 194 passed — CPU-only, offline, no Ollama required
 ```
 
-CI runs the suite on Python 3.11–3.13 plus a packaging smoke job that installs the wheel
-and drives the CLI from a foreign working directory. The acceptance criteria AC1–AC14
+CI runs the suite against a locked dependency set (`requirements-ci.txt`) on the single
+interpreter pinned by `.python-version`, plus a deliberately unlocked packaging smoke job
+that installs the wheel and drives the CLI from a foreign working directory — so a break
+caused by a new upstream release surfaces in the smoke job rather than reddening the
+main suite. The acceptance criteria AC1–AC14
 from the [specification](FAILURETRACE_SPEC.md) are executable tests in
 [test_acceptance.py](failuretrace/tests/test_acceptance.py), covering ingestion,
 classification, dual-store persistence, retrieval explanations, planner non-execution,

@@ -317,3 +317,105 @@ or alters the keep/reset decision.
   behavior is trivially identical. ✅
 - CLI commands run against demo data (`test_cli.py`, `test_ac11…`). Full suite green
   (**133 passed, 0 skipped**, CPU-only, offline). ✅
+
+---
+
+## 9. Phase 8 implementation record (closing the retrieval loop)
+
+§3.7/§8 built the **write** half of the integration: a rejection becomes stored evidence.
+This phase builds the **read** half: stored evidence reaches the agent *before* it commits
+to the next experiment. Still **zero-touch** — no autoresearch file is modified.
+
+### 9.1 The gap this closes
+
+`render_program_md_hook()` only told the agent to *record*. Nothing told it to *consult*.
+Concretely, three things were missing or unreachable:
+
+1. No `program.md` counterpart for the read path, so retrieved evidence had no route back
+   into the loop — the "bounded guidance" arrow in the architecture was unimplemented.
+2. `summarize_failures()` (the bounded rolling summary) had no consumer outside tests and
+   `demo.py`.
+3. `cli.py` built its `InterventionContext` without `changed_hyperparameters`, so
+   `hyperparameter_overlap` (weight 1.5) and `range_proximity` (weight 1.0) — **2 of the 7
+   retrieval scoring components** — could never fire from the CLI. `guidance` also
+   *required* `--category`, which an agent proposing an edit does not yet know.
+
+### 9.2 Files added / modified
+
+- `failuretrace/evidence/summaries.py` — `ExperimentBrief`, `build_brief()`, `brief_for()`,
+  `render_brief()` (markdown/text/json), `load_brief_config()`. Bounded by config;
+  sections separate binding constraints from advisory penalties from C0/C1 context.
+- `failuretrace/integration/autoresearch_adapter.py` — `render_program_md_consult_hook()`
+  (the read-path hook, `None` when disabled), plus `infer_changed_tunables()`,
+  `load_component_map()`, `components_for()`.
+- `failuretrace/cli.py` — new `brief` command (`--format markdown|text|json`); shared
+  `_intervention_context()` used by `brief` and `guidance`; new `--param NAME=VALUE` and
+  `--infer-from REPO` flags; `--category` now optional; both commands no-op when disabled.
+- `failuretrace/config/defaults.yaml` — `brief:` (`max_items`, `max_chars`) and
+  `components:` (knob → component). **Neither is added to `_SEMANTIC_SECTIONS`** — see
+  §9.5.
+- Exports updated in `failuretrace/__init__.py`, `evidence/__init__.py`,
+  `integration/__init__.py`.
+- Tests: `test_evidence.py`, `test_integration.py`, `test_cli.py`; AC13 strengthened.
+
+### 9.3 How the agent uses it
+
+`brief --infer-from .` diffs the working tree's `train.py` against `HEAD` (the state the
+agent is in after editing but before committing), recovers which tunables moved, maps them
+to components, and prints the ranked prior failures for that change:
+
+```
+### Binding constraints (C2+ or repeated deterministic failure)
+- likely_instability: C2+ evidence (C2_replicated_effect)
+
+### Advisory (soft penalties — prefer to avoid, not forbidden)
+- optimizer.lr: repeated instability in 3 nearby trials
+
+### Plausible hypotheses (C0/C1 — NOT causally validated)
+- [likely_instability] Optimization was unstable … (score=5.49, C1_plausible_hypothesis, x3 records, not causally validated)
+```
+
+Before the replication gate runs, the same query returns **no** binding constraint — the
+constraint appears only once the evidence is promoted to C2. This is the ladder doing its
+job at the point of use, which is verified by
+`test_cli_brief_surfaces_binding_constraint_after_replication`.
+
+### 9.4 Epistemic guarantees at the point of use
+
+This is the first surface where FailureTrace output feeds a model that will *act* on it,
+so overclaiming here becomes a real experimental decision:
+
+- Binding constraints come only from `build_guidance()`, which already requires effective
+  C2+ or a repeated deterministic resource failure (de-duplicated by source commit).
+- C0/C1 items are labeled `NOT causally validated` in the section header *and* on each
+  line, and the consult hook instructs the agent not to treat them as established facts —
+  explicitly including "do not let them stop you from testing an idea", so the layer
+  cannot quietly become a conservatism ratchet.
+- Identical findings collapse to one line with an `xN records` marker. That count is a
+  statement about how many records match, **not** a replication claim; whether repetition
+  is independent evidence remains the guidance layer's decision.
+- The brief is bounded (`max_items` per section, `max_chars` on prose) and reports how
+  many items it dropped rather than silently truncating.
+
+### 9.5 Deviations / decisions
+
+1. **`brief` and `components` are excluded from `settings_hash()`.** The comment on
+   `_SEMANTIC_SECTIONS` invites growth, but these sections shape retrieval *queries*, not
+   the meaning of a persisted record. Adding them would change the `settings_hash` of every
+   record already written and break the reproducibility guarantee. Verified: the hash is
+   `83900a8ce1e2109d` before and after this phase.
+2. **AC13 was strengthened, not redefined.** It now also asserts
+   `render_program_md_consult_hook(settings) is None` when disabled. Without this the
+   criterion ("FailureTrace disabled ⇒ autoresearch unchanged") would be incomplete, since
+   the new hook is a second way the agent's instructions could change.
+3. **`brief_for()` lives in `evidence/`, not `integration/optimizer_adapter.py`.** It
+   composes evidence-layer pieces; the optimizer adapter stays optimizer-facing.
+4. **`--infer-from` returns `{}` rather than guessing** when `train.py` or the git ref is
+   unavailable, and the CLI reports the empty context instead of retrieving on no signal
+   (recency alone would otherwise return arbitrary recent failures as if relevant).
+
+### 9.6 Gate 8
+
+**194 passed, 0 skipped, 0 failed** — CPU-only, offline, Ollama absent (176 before this
+phase; 18 added). No autoresearch file touched; `enabled: false` keeps both hooks absent
+and writes nothing.

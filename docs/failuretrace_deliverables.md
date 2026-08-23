@@ -14,8 +14,11 @@ reconcile, tightened over-regularization rule, configurable retrieval min-score 
 persisted classifier provenance, realistic-artifact adapter tests). Later extension —
 **Phase 7** (deterministic controlled effect-size estimation: magnitude + a closed-form
 interval over a hypothesis's counterfactual trials once it reaches C3; annotates the ladder
-without changing it; `effects` CLI + retrieval/guidance/report surfacing). Test suite:
-**170 passed, 0 skipped**, CPU-only, offline. All acceptance criteria **AC1–AC14** pass.
+without changing it; `effects` CLI + retrieval/guidance/report surfacing) and **Phase 8**
+(closing the retrieval loop: a bounded, epistemically-sectioned pre-experiment `brief` plus
+a flag-guarded `program.md` consult hook, so stored evidence actually reaches the agent
+before it commits to the next experiment). Test suite: **194 passed, 0 skipped**, CPU-only,
+offline. All acceptance criteria **AC1–AC14** pass.
 
 ---
 
@@ -42,6 +45,10 @@ retrieval + guidance (deterministic, explainable) failuretrace/evidence/
 counterfactual planner + replication gate         failuretrace/planner/
    ▼
 CLI + matplotlib-optional reports                 failuretrace/cli.py, reporting/
+   │
+   └─► bounded pre-experiment brief ──────────────► back to the autoresearch agent
+       (`brief --infer-from .`, flag-guarded            BEFORE the next experiment
+        program.md consult hook)                        (Phase 8, closes the loop)
 ```
 
 Design invariants (enforced in code + tests): direction-aware comparisons via one
@@ -61,17 +68,17 @@ conditions; confidence from a fixed rubric; everything runs CPU-only and offline
   v4 immutability triggers, v5 persisted classifications), `repository.py` (**the only write
   path**; hard-constraint gate; **promotion evidence gate**; SQLite-first atomic dual write
   with `reconcile_json`; effective-level computation)
-- `.github/workflows/ci.yml` — CPU-only/offline pytest on py3.11–3.13 + a packaging smoke
-  job that installs the wheel and runs the CLI from a different directory
 - `telemetry/` — `schema.py`, `collector.py`, `adapters.py` (`parse_run_log`)
 - `classifier/` — `rules.py`, `classifier.py`, `thresholds.py`, `context.py`
 - `analyst/` — `fallback.py`, `ollama_client.py`, `prompt.py`, `service.py`
-- `evidence/` — `retrieval.py`, `guidance.py`, `summaries.py`
+- `evidence/` — `retrieval.py`, `guidance.py`, `summaries.py` (Phase 8: `ExperimentBrief`,
+  `build_brief`/`brief_for`/`render_brief` — the bounded, honestly-sectioned brief)
 - `planner/` — `interventions.py`, `counterfactual.py`, `replication.py`
 - `estimation/` — `effect.py` (Phase 7: deterministic controlled effect-size + closed-form
   interval; annotates C3+ hypotheses, persisted in the immutable `effect_estimates` table, schema v6)
-- `integration/` — `autoresearch_adapter.py` (public API + hook + adapters),
-  `optimizer_adapter.py` (`SearchGuidance` producer; no Optuna)
+- `integration/` — `autoresearch_adapter.py` (public API + both `program.md` hooks +
+  adapters + Phase-8 `infer_changed_tunables`), `optimizer_adapter.py` (`SearchGuidance`
+  producer; no Optuna)
 - `reporting/` — `summary.py`, `failure_map.py`, `trial.py`, `plots.py` (matplotlib-optional)
 - `cli.py`, `__main__.py`, `demo.py`
 - `tests/` — models, stores, telemetry, classifier, analyst, evidence, planner,
@@ -79,7 +86,11 @@ conditions; confidence from a fixed rubric; everything runs CPU-only and offline
 
 ### Repo root
 - `pyproject.toml` (py≥3.11; `[project.scripts] failuretrace`), `demo/run_demo.py`,
-  `docs/failuretrace_integration_report.md` (Phase 0 + §8 Phase 5), this file.
+  `docs/failuretrace_integration_report.md` (Phase 0 + §8 Phase 5 + §9 Phase 8), this file.
+- `.github/workflows/ci.yml` — CPU-only/offline pytest on the single interpreter pinned by
+  `.python-version`, against the locked `requirements-ci.txt`, plus a deliberately
+  unlocked packaging-smoke job that installs the wheel and runs the CLI from another
+  directory.
 - `autoresearch/` — the reconnaissance target, **cloned & gitignored, never modified**.
 
 ## 3. Commands
@@ -113,6 +124,9 @@ python -m failuretrace ingest trial.json
 python -m failuretrace gate                  # advance the ladder (C1->C2->C3->C4) + estimate effects
 python -m failuretrace effects               # list controlled effect sizes for C3+ hypotheses
 python -m failuretrace guidance --category likely_instability --component optimizer
+# what do prior failures say about the experiment I am ABOUT to run? (Phase 8)
+python -m failuretrace brief --infer-from /path/to/autoresearch
+python -m failuretrace brief --component optimizer --param MATRIX_LR=0.08 --format json
 python -m failuretrace report summary       # also: failures | map | trial <trial_id>
 python -m failuretrace record --commit <hash> --status <discard|crash> \
     --run-log run.log --repo . --branch autoresearch/<tag> --description "<desc>"
@@ -133,7 +147,14 @@ therefore a **thin, flag-guarded, zero-touch adapter**:
   tunable block from `train.py@commit`.
 - **Offline batch (best-effort, lossy)** — `ingest_results_tsv()` backfills from a preserved
   `results.tsv` + working tree (documented as lossy: reset commits / overwritten logs).
-- **Disabled ⇒ no-op** — with `enabled: false` the hook is absent and
+- **Consult hook (Phase 8, the read path)** — `render_program_md_consult_hook(settings)`
+  emits a second optional `program.md` section telling the agent to run
+  `python -m failuretrace brief --infer-from .` *after* editing `train.py` and *before*
+  committing. The brief infers which tunables moved (working tree vs `HEAD`), ranks the
+  relevant prior failures, and separates binding constraints from advisory penalties from
+  C0/C1 context. Read-only: it never edits `train.py`, changes the metric, or alters the
+  keep/reset decision.
+- **Disabled ⇒ no-op** — with `enabled: false` **both** hooks are absent and
   `record_rejected_trial()` returns `None` with zero writes ⇒ autoresearch is byte-for-byte
   identical (AC13, verified: the clone stays pinned at `228791f`, clean tree).
 
@@ -205,6 +226,15 @@ write time by the repository. Inconclusive evidence yields context/soft warnings
   validated end-to-end against **realistic** CPU stand-in artifacts (real `run.log` OOM
   traceback / NaN `FAIL` marker → resource_pressure / divergence, and a `results.tsv`
   corpus), but a live GPU run against the real loop is still the one unshipped validation.
+- **The brief is delivered, not enforced.** Phase 8 puts evidence in front of the agent and
+  states which items are binding, but nothing mechanically prevents an agent from ignoring
+  a constraint — by design, since FailureTrace produces guidance and never steers a search.
+  Whether the brief actually reduces redundant experimentation is an empirical question
+  that requires the controlled evaluation below; it is not yet measured.
+- **`--infer-from` assumes the autoresearch shape**: one edited `train.py` and the
+  module-level tunable block. It diffs the working tree against `HEAD`, so it sees an
+  uncommitted edit; once the agent commits, the change is no longer "pending" and the flags
+  (`--param`/`--component`) are the route.
 
 ## 7. Suggested next phase (beyond the current spec)
 
@@ -213,5 +243,11 @@ write time by the repository. Inconclusive evidence yields context/soft warnings
 - Optional local embeddings for retrieval (kept out of the MVP; current retrieval is
   deterministic and explainable and needs no vector DB).
 - A thin, tested Optuna/BO consumer of `SearchGuidance` (adapter exists; no sampler shipped).
+- **The controlled evaluation** — vanilla autoresearch vs. FailureTrace at equal wall-clock
+  across multiple seeds, measuring final `val_bpb`, redundancy rate (failure categories hit
+  more than once), and diversity of explored regions. Phase 8 is its prerequisite: with the
+  brief unwired, guidance never reached the agent, so none of those metrics could move.
 - ~~Multi-context C3/C4 accumulation~~ — **done**: `promote_counterfactuals` / `promote_c4` /
   `advance_promotions` drive the upper gate from accumulated counterfactual links (§5).
+- ~~Closing the retrieval loop~~ — **done (Phase 8)**: `brief` + the `program.md` consult
+  hook deliver bounded, honestly-graded evidence to the agent before it commits an edit.
