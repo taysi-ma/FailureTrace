@@ -4,6 +4,7 @@
     python -m failuretrace ingest <trial.json>     # synthetic/demo ingestion
     python -m failuretrace record --commit ... --status ... --run-log run.log --repo .
     python -m failuretrace gate                     # promote replicated C1 hypotheses to C2
+    python -m failuretrace brief --infer-from .     # prior failures for the run about to start
     python -m failuretrace guidance --category ... --component ...
     python -m failuretrace report summary|failures|map
     python -m failuretrace report trial <trial_id>
@@ -178,22 +179,94 @@ def _cmd_effects(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_guidance(args: argparse.Namespace) -> int:
-    from .core.enums import FailureCategory, MetricDirection
-    from .evidence import InterventionContext, summarize_guidance
-    from .integration.optimizer_adapter import guidance_for
+def _parse_param(raw: str) -> tuple[str, Any]:
+    """Parse a ``NAME=VALUE`` flag. VALUE is a Python literal when possible, else a string."""
+    import ast
+
+    name, sep, value = raw.partition("=")
+    if not sep or not name.strip():
+        raise argparse.ArgumentTypeError(f"--param expects NAME=VALUE, got {raw!r}")
+    try:
+        parsed = ast.literal_eval(value.strip())
+    except (ValueError, SyntaxError):
+        parsed = value.strip()
+    return name.strip(), parsed
+
+
+def _intervention_context(args: argparse.Namespace, settings: Settings):
+    """Build the InterventionContext describing the experiment about to be run.
+
+    Two entry styles, combinable: explicit flags (``--category``/``--component``/
+    ``--param``) and ``--infer-from <repo>``, which recovers the changed tunables by
+    diffing the working tree's ``train.py`` against ``HEAD`` and maps them to components
+    via the ``components:`` config section. Explicit flags win on conflict.
+    """
+    from .core.enums import FailureCategory
+    from .evidence import InterventionContext
+    from .integration.autoresearch_adapter import components_for, infer_changed_tunables
+
+    components = list(args.component or [])
+    params: dict[str, Any] = {}
+
+    if getattr(args, "infer_from", None):
+        inferred = infer_changed_tunables(args.infer_from)
+        params.update(inferred)
+        components.extend(c for c in components_for(inferred, settings) if c not in components)
+
+    # Explicit --param overrides an inferred value for the same knob.
+    for name, value in (args.param or []):
+        params[name] = value
+
+    ic = InterventionContext(
+        category=FailureCategory(args.category) if args.category else None,
+        changed_components=components,
+        changed_hyperparameters=params,
+        metric_direction=settings.metric.direction,
+    )
+    # Recency contributes to every stored hypothesis, so an empty context would return
+    # arbitrary recent failures dressed up as relevant. Report that instead.
+    has_signal = bool(ic.category or ic.changed_components or ic.changed_hyperparameters)
+    return ic, has_signal
+
+
+def _cmd_brief(args: argparse.Namespace) -> int:
+    from .evidence import NO_CONTEXT_MESSAGE, brief_for, render_brief
 
     settings = _build_settings(args)
+    if not settings.enabled:
+        print("failuretrace is disabled (enabled: false); no brief produced")
+        return 0
     initialize_database(settings)
     repository = Repository(settings)
 
-    category = FailureCategory(args.category) if args.category else None
-    components = args.component or []
-    ic = InterventionContext(
-        category=category,
-        changed_components=list(components),
-        metric_direction=settings.metric.direction,
-    )
+    ic, has_signal = _intervention_context(args, settings)
+    if not has_signal:
+        print(
+            "no experiment context given: pass --category, --component, --param NAME=VALUE, "
+            "or --infer-from <repo>"
+        )
+        return 2
+
+    brief = brief_for(ic, settings=settings, repository=repository, top_k=args.top_k)
+    if brief.is_empty and args.format != "json":
+        print(NO_CONTEXT_MESSAGE)
+        return 0
+    print(render_brief(brief, fmt=args.format, settings=settings))
+    return 0
+
+
+def _cmd_guidance(args: argparse.Namespace) -> int:
+    from .evidence import summarize_guidance
+    from .integration.optimizer_adapter import guidance_for
+
+    settings = _build_settings(args)
+    if not settings.enabled:
+        print("failuretrace is disabled (enabled: false); no guidance produced")
+        return 0
+    initialize_database(settings)
+    repository = Repository(settings)
+
+    ic, _ = _intervention_context(args, settings)
     guidance = guidance_for(ic, settings=settings, repository=repository, top_k=args.top_k)
     print(f"search guidance: {summarize_guidance(guidance)}")
     for hc in guidance.hard_constraints:
@@ -273,11 +346,30 @@ def build_parser() -> argparse.ArgumentParser:
         "effects", help="estimate and list controlled effect sizes for C3+ hypotheses"
     ).set_defaults(func=_cmd_effects)
 
+    def _add_context_args(p: argparse.ArgumentParser) -> None:
+        """Flags describing the experiment about to be run (shared by brief + guidance)."""
+        p.add_argument("--category", default=None, help="failure category to match (e.g. likely_instability)")
+        p.add_argument("--component", action="append", default=None, help="changed component (repeatable)")
+        p.add_argument(
+            "--param", action="append", type=_parse_param, default=None, metavar="NAME=VALUE",
+            help="hyperparameter this experiment sets, e.g. --param MATRIX_LR=0.08 (repeatable)",
+        )
+        p.add_argument(
+            "--infer-from", default=None, dest="infer_from", metavar="REPO",
+            help="infer changed tunables by diffing REPO/train.py against git HEAD",
+        )
+        p.add_argument("--top-k", type=int, default=5, dest="top_k")
+
     p_guidance = sub.add_parser("guidance", help="print search guidance for an intervention context")
-    p_guidance.add_argument("--category", default=None, help="failure category to match (e.g. likely_instability)")
-    p_guidance.add_argument("--component", action="append", default=None, help="changed component (repeatable)")
-    p_guidance.add_argument("--top-k", type=int, default=5, dest="top_k")
+    _add_context_args(p_guidance)
     p_guidance.set_defaults(func=_cmd_guidance)
+
+    p_brief = sub.add_parser(
+        "brief", help="print bounded prior-failure evidence for the experiment about to run"
+    )
+    _add_context_args(p_brief)
+    p_brief.add_argument("--format", default="markdown", choices=["markdown", "text", "json"])
+    p_brief.set_defaults(func=_cmd_brief)
 
     return parser
 
