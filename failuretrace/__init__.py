@@ -49,10 +49,14 @@ from .telemetry import TelemetryRecord, normalize, parse_run_log, telemetry_from
 from .classifier import ClassificationContext, FailureClassification, classify
 from .analyst import OllamaClient, OllamaError, analyze, build_fallback
 from .evidence import (
+    ExperimentBrief,
     InterventionContext,
     RetrievedFailure,
     SearchGuidance,
+    brief_for,
+    build_brief,
     build_guidance,
+    render_brief,
     retrieve_relevant_failures,
     summarize_failures,
 )
@@ -70,9 +74,12 @@ from .planner import (
     promote_replications,
 )
 from .integration import (
+    components_for,
     guidance_for,
+    infer_changed_tunables,
     record_from_run,
     record_rejected_trial,
+    render_program_md_consult_hook,
     render_program_md_hook,
 )
 from .estimation import estimate_effect, estimate_effects
@@ -140,6 +147,11 @@ __all__ = [
     "SearchGuidance",
     "build_guidance",
     "summarize_failures",
+    # evidence: pre-experiment brief (Phase 8)
+    "ExperimentBrief",
+    "build_brief",
+    "brief_for",
+    "render_brief",
     # planner
     "plan_counterfactual",
     "ReplicationEvidence",
@@ -159,6 +171,9 @@ __all__ = [
     "record_rejected_trial",
     "record_from_run",
     "render_program_md_hook",
+    "render_program_md_consult_hook",
+    "infer_changed_tunables",
+    "components_for",
     "guidance_for",
     # demo
     "run_demo",
