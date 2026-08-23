@@ -72,6 +72,30 @@ retrieval:
   # top-k and inflate downstream guidance counts.
   min_relevance_score: 0.0
 
+# --- Pre-experiment brief (Phase 8). The retrieval half of the loop, delivered to the
+# agent BEFORE it commits an edit. Bounded on purpose: long contexts are used poorly in
+# the middle (Liu et al., TACL 2024), so only the top-ranked evidence is injected and the
+# remainder is reported as a count rather than dumped.
+brief:
+  max_items: 5      # per section (hard constraints / soft penalties / plausible context)
+  max_chars: 2000   # hard ceiling on the rendered brief; overflow is truncated + counted
+
+# --- Changed-tunable -> component mapping (Phase 8) ---------------------------------
+# `brief --infer-from` recovers which train.py constants an agent changed, but retrieval
+# also scores component overlap. This maps the real autoresearch knobs (train.py:432-451)
+# onto the coarse components stored on trials. Written component -> knobs for readability;
+# the lookup is inverted in code. Unmapped knobs simply contribute no component signal.
+#
+# NOTE: deliberately NOT part of Settings._SEMANTIC_SECTIONS. This mapping and `brief`
+# above shape retrieval *queries*, not the meaning of a persisted record, and adding a
+# section to the semantic hash would change the settings_hash of every record already
+# written.
+components:
+  optimizer: [EMBEDDING_LR, UNEMBEDDING_LR, MATRIX_LR, SCALAR_LR, WEIGHT_DECAY, ADAM_BETAS]
+  schedule: [WARMUP_RATIO, WARMDOWN_RATIO, FINAL_LR_FRAC]
+  model: [ASPECT_RATIO, HEAD_DIM, WINDOW_PATTERN, DEPTH]
+  batch: [TOTAL_BATCH_SIZE, DEVICE_BATCH_SIZE]
+
 # --- Controlled effect-size estimation (Phase 7). Deterministic; no priors/sampling. ---
 # Summarizes the magnitude + a closed-form interval of a hypothesis's counterfactual
 # (controlled) trials once it reaches C3. Purely additive: with enabled=false nothing
