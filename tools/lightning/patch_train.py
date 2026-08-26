@@ -3,7 +3,8 @@
 
 autoresearch imports a FlashAttention-3 kernel that only runs on Hopper (H100/H200).
 This swaps the single FA3 call for PyTorch's ``scaled_dot_product_attention`` so the same
-``train.py`` runs on **any** CUDA GPU (A100, L4, T4, ...). bf16 is kept (native on A100).
+``train.py`` runs on CUDA GPUs outside Hopper. Precision remains unchanged; apply the
+separate T4 profile patch when the GPU does not support native bf16.
 The sliding-window ("S") layers are preserved via an additive causal-band mask, so the
 model is numerically the same as with FA3 (SDPA uses FA2 under the hood on A100).
 
@@ -25,7 +26,7 @@ repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/fl
 fa3 = get_kernel(repo).flash_attn_interface'''
 
 _NEW = '''# --- FailureTrace/Lightning patch: FlashAttention-3 -> torch SDPA ---------------
-# Runs on any CUDA GPU (A100/L4/T4) instead of requiring Hopper FA3. bf16 kept.
+# Runs on CUDA GPUs outside Hopper instead of requiring FA3. Precision is unchanged.
 # Sliding-window ("S") layers preserved via an additive causal-band mask.
 import types as _ft_types
 
@@ -48,21 +49,29 @@ fa3 = _ft_types.SimpleNamespace(flash_attn_func=_ft_sdpa_flash_attn_func)
 # --- end patch -----------------------------------------------------------------'''
 
 
-def main() -> int:
-    path = Path(sys.argv[1] if len(sys.argv) > 1 else "train.py")
+def patch_file(path: Path) -> bool:
+    """Apply the SDPA compatibility patch. Return ``True`` when the file changed."""
     src = path.read_text(encoding="utf-8")
     if "_ft_sdpa_flash_attn_func" in src:
         print(f"{path}: already patched — nothing to do")
-        return 0
+        return False
     if _OLD not in src:
-        print(
+        raise ValueError(
             f"ERROR: the expected FlashAttention-3 block was not found in {path}.\n"
-            "This patch targets autoresearch pinned at 228791f; adapt _OLD if your copy differs.",
-            file=sys.stderr,
+            "This patch targets autoresearch pinned at 228791f; adapt _OLD if your copy differs."
         )
-        return 1
     path.write_text(src.replace(_OLD, _NEW), encoding="utf-8")
-    print(f"{path}: patched FlashAttention-3 -> torch SDPA (now runs on A100/L4/T4).")
+    print(f"{path}: patched FlashAttention-3 -> torch SDPA.")
+    return True
+
+
+def main() -> int:
+    path = Path(sys.argv[1] if len(sys.argv) > 1 else "train.py")
+    try:
+        patch_file(path)
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0
 
 

@@ -21,9 +21,11 @@ deterministic, plannable route to a real C3 + effect. Edit CONFIGS for other des
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from failuretrace import (
@@ -48,23 +50,44 @@ from failuretrace.telemetry import parse_run_log
 # share one intervention family across distinct (seed, commit) units -> C1->C2; the fix
 # validates the plan -> C2->C3.
 CONFIGS = [
-    {"label": "baseline", "role": "baseline", "commit": "run-base", "seed": 42,
+    {"label": "baseline", "role": "baseline", "seed": 42,
      "components": ["model"], "overrides": {}},
-    {"label": "oom-a", "role": "failure", "commit": "run-oom-a", "seed": 43,
+    {"label": "oom-a", "role": "failure", "seed": 43,
      "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 512}},
-    {"label": "oom-b", "role": "failure", "commit": "run-oom-b", "seed": 44,
+    {"label": "oom-b", "role": "failure", "seed": 44,
      "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 512}},
-    {"label": "fix", "role": "counterfactual", "commit": "run-fix", "seed": 45,
+    {"label": "fix", "role": "counterfactual", "seed": 45,
      "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 32}},
 ]
+
+T4_CONFIGS = [
+    {"label": "baseline", "role": "baseline", "seed": 42,
+     "components": ["model"], "overrides": {}},
+    {"label": "oom-a", "role": "failure", "seed": 43,
+     "components": ["model"],
+     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**18}},
+    {"label": "oom-b", "role": "failure", "seed": 44,
+     "components": ["model"],
+     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**18}},
+    {"label": "fix", "role": "counterfactual", "seed": 45,
+     "components": ["model"], "overrides": {}},
+]
+
+
+@dataclass(frozen=True)
+class RunArtifact:
+    log_text: str
+    returncode: int | None
+    config_hash: str
+    code_diff: str
 
 
 def _const_re(name: str) -> re.Pattern:
     return re.compile(rf"^({re.escape(name)}[ \t]*=[ \t]*)([^#\n]*)(.*)$", re.MULTILINE)
 
 
-def _set_constants(train_py: Path, overrides: dict) -> str:
-    """Apply {CONST: value} overrides to train.py; return original text (for restore)."""
+def _set_run_config(train_py: Path, overrides: dict, seed: int) -> str:
+    """Apply constants and the real RNG seed; return original text for restoration."""
     original = train_py.read_text(encoding="utf-8")
     text = original
     for name, value in overrides.items():
@@ -72,57 +95,124 @@ def _set_constants(train_py: Path, overrides: dict) -> str:
         text, n = _const_re(name).subn(rf"\g<1>{literal}  \g<3>", text)
         if n == 0:
             raise SystemExit(f"constant {name!r} not found in {train_py}")
+    for pattern, replacement in (
+        (r"torch\.manual_seed\(\d+\)", f"torch.manual_seed({seed})"),
+        (r"torch\.cuda\.manual_seed\(\d+\)", f"torch.cuda.manual_seed({seed})"),
+    ):
+        text, n = re.subn(pattern, replacement, text, count=1)
+        if n != 1:
+            raise SystemExit(f"seed assignment matching {pattern!r} not found in {train_py}")
     train_py.write_text(text, encoding="utf-8")
     return original
 
 
-def _run_training(repo_dir: Path, log_path: Path, launcher: list[str]) -> str:
+def _run_training(repo_dir: Path, log_path: Path, launcher: list[str]) -> tuple[str, int]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as log:
         proc = subprocess.run(launcher, cwd=repo_dir, stdout=log, stderr=subprocess.STDOUT, text=True)
     text = log_path.read_text(encoding="utf-8")
     print(f"    train.py exit={proc.returncode}, log={log_path}")
-    return text
+    return text, proc.returncode
 
 
-def _val_bpb(log_text: str) -> float | None:
-    return parse_run_log(log_text).telemetry.val_metric
+def _git(repo_dir: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_dir), *args], capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed in {repo_dir}: {proc.stderr.strip()}")
+    return proc.stdout.strip()
 
 
-def _ingest_failure(repo, settings, cfg, log_text, baseline):
-    parsed = parse_run_log(log_text)
+def _source_fingerprint(repo_dir: Path) -> str:
+    """Hash the effective trainer/protocol while excluding the replication seed."""
+    train_text = (repo_dir / "train.py").read_text(encoding="utf-8")
+    train_text = re.sub(r"torch\.manual_seed\(\d+\)", "torch.manual_seed(<seed>)", train_text)
+    train_text = re.sub(
+        r"torch\.cuda\.manual_seed\(\d+\)", "torch.cuda.manual_seed(<seed>)", train_text,
+    )
+    prepare_text = (repo_dir / "prepare.py").read_text(encoding="utf-8")
+    return hashlib.sha256(f"{train_text}\n{prepare_text}".encode()).hexdigest()
+
+
+def _metadata_fingerprint(repo_dir: Path, cfg: dict) -> str:
+    payload = {
+        "base_source": _source_fingerprint(repo_dir),
+        "overrides": cfg["overrides"],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _ingest_failure(repo, settings, cfg, artifact, baseline, git_commit):
+    parsed = parse_run_log(artifact.log_text)
     ec = {
-        "git_commit": cfg["commit"], "seed": cfg["seed"], "status": "crash",
+        "git_commit": git_commit, "config_hash": artifact.config_hash,
+        "seed": cfg["seed"], "status": "discard" if parsed.finished else "crash",
         "baseline_metric": baseline, "changed_components": cfg["components"],
         "hyperparameters": cfg["overrides"], "changed_hyperparameters": cfg["overrides"],
     }
     metrics = {"post_change_metric": parsed.telemetry.val_metric}
-    diff = "# " + json.dumps(cfg["overrides"])
     rd = {"telemetry": parsed.telemetry.model_dump(), "exception_type": parsed.exception_type,
           "exception_message": parsed.exception_message, "finished": parsed.finished}
-    return record_rejected_trial(ec, metrics, diff, rd, settings=settings, repository=repo)
+    return record_rejected_trial(
+        ec, metrics, artifact.code_diff, rd, settings=settings, repository=repo,
+    )
 
 
-def _save_counterfactual(repo, settings, cfg, log_text, baseline):
+def _save_counterfactual(repo, settings, cfg, artifact, baseline, git_commit):
     """Persist the fix as a plain (completed) trial — no hypothesis; it validates a plan."""
+    parsed = parse_run_log(artifact.log_text)
+    if not parsed.finished or parsed.telemetry.val_metric is None:
+        raise SystemExit(
+            f"counterfactual {cfg['label']!r} did not finish with val_bpb; "
+            "refusing to persist it as completed"
+        )
     trial = TrialRecord(
-        trial_id=new_trial_id(), git_commit=cfg["commit"], seed=cfg["seed"],
+        trial_id=new_trial_id(), git_commit=git_commit, config_hash=artifact.config_hash,
+        seed=cfg["seed"],
         status=TrialStatus.completed, metric_name=settings.metric.name,
         metric_direction=settings.metric.direction, baseline_metric=baseline,
-        post_change_metric=_val_bpb(log_text), changed_files=["train.py"],
+        post_change_metric=parsed.telemetry.val_metric, code_diff=artifact.code_diff,
+        changed_files=["train.py"],
         changed_components=cfg["components"], hyperparameters=cfg["overrides"],
     )
     return repo.save_trial(trial)
 
 
-def _load_log(cfg, args, repo_dir, reports_dir) -> str:
+def _require_baseline(cfg: dict, artifact: RunArtifact) -> float:
+    """Return a usable baseline metric or stop before any evidence can be written."""
+    parsed = parse_run_log(artifact.log_text)
+    val = parsed.telemetry.val_metric
+    if artifact.returncode not in (None, 0) or not parsed.finished or val is None:
+        raise SystemExit(
+            f"baseline {cfg['label']!r} failed or produced no val_bpb; "
+            "aborting before any failure evidence is recorded"
+        )
+    return val
+
+
+def _load_artifact(cfg, args, repo_dir, reports_dir) -> RunArtifact:
     if args.from_logs:
-        return (Path(args.from_logs) / f"{cfg['label']}.log").read_text(encoding="utf-8")
+        log_text = (Path(args.from_logs) / f"{cfg['label']}.log").read_text(encoding="utf-8")
+        return RunArtifact(
+            log_text=log_text,
+            returncode=None,
+            config_hash=_metadata_fingerprint(repo_dir, cfg),
+            code_diff="# imported config: " + json.dumps(cfg["overrides"], sort_keys=True),
+        )
     train_py = repo_dir / "train.py"
-    print(f"[{cfg['label']}] overrides={cfg['overrides']} -> training (~5 min + compile)")
-    original = _set_constants(train_py, cfg["overrides"])
+    print(
+        f"[{cfg['label']}] seed={cfg['seed']} overrides={cfg['overrides']} "
+        "-> training (~5 min + compile)"
+    )
+    original = _set_run_config(train_py, cfg["overrides"], cfg["seed"])
     try:
-        return _run_training(repo_dir, reports_dir / f"{cfg['label']}.log", args.launcher.split())
+        config_hash = _source_fingerprint(repo_dir)
+        code_diff = _git(repo_dir, "diff", "--", "train.py", "prepare.py")
+        log_text, returncode = _run_training(
+            repo_dir, reports_dir / f"{cfg['label']}.log", args.launcher.split(),
+        )
+        return RunArtifact(log_text, returncode, config_hash, code_diff)
     finally:
         train_py.write_text(original, encoding="utf-8")  # always restore train.py
 
@@ -135,6 +225,10 @@ def main() -> int:
     ap.add_argument("--from-logs", default=None, help="ingest existing <label>.log files instead of training")
     ap.add_argument("--launcher", default="uv run train.py", help="command used to run training")
     ap.add_argument("--configs", default=None, help="JSON file with a custom CONFIGS list")
+    ap.add_argument(
+        "--profile", choices=("a100", "t4"), default="a100",
+        help="built-in trial configuration (ignored when --configs is supplied)",
+    )
     args = ap.parse_args()
 
     settings = load_settings(overrides={
@@ -144,21 +238,29 @@ def main() -> int:
     initialize_database(settings)
     repo = Repository(settings)
     repo_dir, reports_dir = Path(args.repo), Path(args.reports_dir)
-    configs = json.loads(Path(args.configs).read_text()) if args.configs else CONFIGS
+    configs = (
+        json.loads(Path(args.configs).read_text())
+        if args.configs else (T4_CONFIGS if args.profile == "t4" else CONFIGS)
+    )
+    git_commit = _git(repo_dir, "rev-parse", "HEAD")
+    print(f"autoresearch HEAD: {git_commit}")
 
     baseline = None
     fix_trial = None
     for cfg in configs:
-        log_text = _load_log(cfg, args, repo_dir, reports_dir)
-        val = _val_bpb(log_text)
+        artifact = _load_artifact(cfg, args, repo_dir, reports_dir)
+        parsed = parse_run_log(artifact.log_text)
+        val = parsed.telemetry.val_metric
         if cfg["role"] == "baseline":
-            baseline = val
+            baseline = _require_baseline(cfg, artifact)
             print(f"  baseline val_bpb = {baseline}")
         elif cfg["role"] == "failure":
-            trial = _ingest_failure(repo, settings, cfg, log_text, baseline)
+            trial = _ingest_failure(repo, settings, cfg, artifact, baseline, git_commit)
             print(f"  failure trial {trial.trial_id if trial else None}  val_bpb={val}")
         elif cfg["role"] == "counterfactual":
-            fix_trial = _save_counterfactual(repo, settings, cfg, log_text, baseline)
+            fix_trial = _save_counterfactual(
+                repo, settings, cfg, artifact, baseline, git_commit,
+            )
             print(f"  counterfactual trial {fix_trial.trial_id}  val_bpb={val}")
 
     # C1 -> C2 for the replicated failure.
