@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
-"""Apply a conservative FP16/T4 profile to a pinned autoresearch clone.
+"""Apply a conservative FP32/T4 profile to a pinned autoresearch clone.
 
 The upstream defaults target an H100: depth 8, sequence length 2048, device batch 128,
 and bf16. A 16 GB Tesla T4 cannot execute that profile. This idempotent patch halves the
 model depth and selects a substantially smaller runtime shape while leaving the fixed
 five-minute experiment budget unchanged.
+
+Precision is FP32, not FP16. Turing has no bf16, but a naive bf16 -> fp16 swap does not
+work either: this trainer assumes bf16's exponent range throughout and ships no
+GradScaler. fp16 overflows at 65504 in at least three places -- the ReLU-squared MLP
+(train.py:108, overflows once any activation exceeds 256), the Polar Express /
+Newton-Schulz iteration's A @ A term (train.py:324), and grad.square() inside the fused
+AdamW step (train.py:310). Observed on a Kaggle T4: NaN loss and FAIL after three
+optimizer steps. FP32 loses the tensor cores (~8.1 vs ~65 TFLOPS), so the fixed 300 s
+budget simply buys fewer steps -- which is irrelevant for a pipeline test that only needs
+a valid val_bpb.
 
 Run ``patch_train.py`` first to replace FlashAttention-3 with torch SDPA, then run:
 
@@ -34,20 +44,15 @@ _TRAIN_REPLACEMENTS: tuple[tuple[str, str], ...] = (
         "DEVICE_BATCH_SIZE = 128  # per-device batch size (reduce if OOM)",
         "DEVICE_BATCH_SIZE = 8    # FailureTrace T4 profile: fits 16 GB VRAM",
     ),
-    ("self.transformer.wte.to(dtype=torch.bfloat16)", "self.transformer.wte.to(dtype=torch.float16)"),
-    ("ve.to(dtype=torch.bfloat16)", "ve.to(dtype=torch.float16)"),
-    ("cos, sin = cos.bfloat16(), sin.bfloat16()", "cos, sin = cos.half(), sin.half()"),
-    # NOT g.half(): this line feeds the Polar Express (Newton-Schulz) iteration, which
-    # computes A = X.mT @ X and then A @ A with a leading coefficient of 3.89. bf16 tops
-    # out near 3.4e38 and survives that; fp16 tops out at 65504, overflows to inf, and
-    # yields NaN parameters within ~3 optimizer steps (train.py:570 prints FAIL, exit 1).
-    # Turing has no bf16, so fp32 is the only safe dtype here. The matrices are small.
+    ("self.transformer.wte.to(dtype=torch.bfloat16)", "self.transformer.wte.to(dtype=torch.float32)"),
+    ("ve.to(dtype=torch.bfloat16)", "ve.to(dtype=torch.float32)"),
+    ("cos, sin = cos.bfloat16(), sin.bfloat16()", "cos, sin = cos.float(), sin.float()"),
     ("X = g.bfloat16()", "X = g.float()"),
     (
         'autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)',
-        'autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.float16)',
+        'autocast_ctx = torch.amp.autocast(device_type="cuda", enabled=False)',
     ),
-    ("H100_BF16_PEAK_FLOPS = 989.5e12", "ACCELERATOR_PEAK_FLOPS = 65.0e12"),
+    ("H100_BF16_PEAK_FLOPS = 989.5e12", "ACCELERATOR_PEAK_FLOPS = 8.1e12"),
     ("/ H100_BF16_PEAK_FLOPS", "/ ACCELERATOR_PEAK_FLOPS"),
 )
 
@@ -93,7 +98,7 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     state = "applied" if changed else "already applied"
-    print(f"{repo}: T4 FP16 profile {state} (depth=4, seq=512, device_batch=8).")
+    print(f"{repo}: T4 FP32 profile {state} (depth=4, seq=512, device_batch=8).")
     return 0
 
 

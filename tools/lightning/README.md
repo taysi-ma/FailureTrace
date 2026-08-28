@@ -7,7 +7,7 @@ them into FailureTrace end-to-end.
 | File | What it does |
 |---|---|
 | `patch_train.py` | Swaps the one FA3 call for PyTorch `scaled_dot_product_attention`; precision is unchanged. |
-| `patch_t4.py` | Applies the Colab/T4 FP16 profile: depth 4, sequence 512, device batch 8, full causal attention, and a bounded validation set. |
+| `patch_t4.py` | Applies the Colab/T4 **FP32** profile: depth 4, sequence 512, device batch 8, full causal attention, bounded validation. FP32 is deliberate — this trainer assumes bf16's exponent range and ships no GradScaler, so fp16 overflows in the ReLU-squared MLP, the Newton-Schulz iteration, and the fused AdamW. |
 | `run_trials.py` | Runs `train.py` with A100 or T4 configs, captures each real `run.log`, ingests into FailureTrace, walks the ladder, and prints levels + effect size. |
 | `free_gpu_trials.ipynb` | One-click notebook for **Kaggle / Colab / Lightning**: detects the GPU, picks the profile, applies the right patches, sizes the batch to the card, prepares data, and runs the trials. Start here if you have no GPU of your own. |
 
@@ -16,7 +16,8 @@ them into FailureTrace end-to-end.
 - **H200/H100** (Hopper): run **unmodified** — skip `patch_train.py`.
 - **A100 / L4**: apply `patch_train.py`; bf16 remains enabled.
 - **T4 (16 GB)**: apply both patches. T4 has no native bf16 path, and the H100-sized
-  sequence/batch defaults do not fit its memory.
+  sequence/batch defaults do not fit its memory. The profile runs FP32 (no tensor cores,
+  ~8.1 vs ~65 TFLOPS), so the fixed 300 s budget buys fewer steps — fine for a pipeline test.
 
 ## Steps (cost-optimized: data prep on free CPU, GPU only for training)
 
@@ -72,7 +73,7 @@ never persisted as `completed` unless its run finished successfully.
 - **Edit the experiment:** change `CONFIGS` in `run_trials.py` (or pass `--configs my.json`).
   Each entry sets `train.py` constants (`DEVICE_BATCH_SIZE`, `MATRIX_LR`, `DEPTH`, ...).
 - **T4 (16 GB):** the profile uses `DEPTH=4`, `MAX_SEQ_LEN=512`,
-  `DEVICE_BATCH_SIZE=8`, `TOTAL_BATCH_SIZE=2**14`, `WINDOW_PATTERN="L"`, and fp16.
+  `DEVICE_BATCH_SIZE=8`, `TOTAL_BATCH_SIZE=2**14`, `WINDOW_PATTERN="L"`, and fp32.
   Run `prepare.py` only after applying `patch_t4.py`, because token batches and validation
   use the patched sequence length.
 - **Test the pipeline with no GPU:** `run_trials.py --from-logs <dir>` ingests existing
