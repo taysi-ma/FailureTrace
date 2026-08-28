@@ -20,7 +20,7 @@ def test_sdpa_patch_is_idempotent(tmp_path: Path) -> None:
     assert train_py.read_text(encoding="utf-8") == once
 
 
-def test_t4_profile_halves_depth_and_is_idempotent(tmp_path: Path) -> None:
+def test_t4_profile_shape_precision_and_idempotence(tmp_path: Path) -> None:
     repo = tmp_path / "autoresearch"
     repo.mkdir()
     train_py = repo / "train.py"
@@ -37,12 +37,17 @@ def test_t4_profile_halves_depth_and_is_idempotent(tmp_path: Path) -> None:
     assert patch_t4.patch_repo(repo) is True
     patched_train = train_py.read_text(encoding="utf-8")
     patched_prepare = prepare_py.read_text(encoding="utf-8")
-    assert "DEPTH = 4" in patched_train
+    assert "DEPTH = 8" in patched_train
     assert "DEVICE_BATCH_SIZE = 8" in patched_train
     assert "TOTAL_BATCH_SIZE = 2**14" in patched_train
     assert 'WINDOW_PATTERN = "L"' in patched_train
+    # fp32 throughout: this trainer assumes bf16's exponent range and ships no GradScaler,
+    # so fp16 overflows in the ReLU-squared MLP, Newton-Schulz, and the fused AdamW.
     assert "torch.bfloat16" not in patched_train
-    assert "MAX_SEQ_LEN = 512" in patched_prepare
+    assert "torch.float16" not in patched_train
+    assert ".half()" not in patched_train
+    assert "enabled=False" in patched_train
+    assert "MAX_SEQ_LEN = 1024" in patched_prepare
     assert patch_t4.patch_repo(repo) is False
     assert train_py.read_text(encoding="utf-8") == patched_train
     assert prepare_py.read_text(encoding="utf-8") == patched_prepare

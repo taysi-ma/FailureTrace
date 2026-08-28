@@ -6,6 +6,11 @@ and bf16. A 16 GB Tesla T4 cannot execute that profile. This idempotent patch ha
 model depth and selects a substantially smaller runtime shape while leaving the fixed
 five-minute experiment budget unchanged.
 
+Sizing is calibrated against a measured run, not guessed: depth 4 / seq 512 / batch 8
+peaked at 691.5 MB of a 14.56 GiB T4 -- roughly 5% of the card. Depth 8 / seq 1024 lands
+near 4-5 GB, which keeps ample headroom while producing dynamics far closer to the real
+H100 configuration (depth 8, seq 2048).
+
 Precision is FP32, not FP16. Turing has no bf16, but a naive bf16 -> fp16 swap does not
 work either: this trainer assumes bf16's exponent range throughout and ships no
 GradScaler. fp16 overflows at 65504 in at least three places -- the ReLU-squared MLP
@@ -38,7 +43,7 @@ _TRAIN_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "DEPTH = 8               # number of transformer layers",
-        "DEPTH = 4               # FailureTrace T4 profile: half-depth model",
+        "DEPTH = 8               # FailureTrace T4 profile: full depth (fits easily in 16 GB)",
     ),
     (
         "DEVICE_BATCH_SIZE = 128  # per-device batch size (reduce if OOM)",
@@ -59,7 +64,7 @@ _TRAIN_REPLACEMENTS: tuple[tuple[str, str], ...] = (
 _PREPARE_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     (
         "MAX_SEQ_LEN = 2048       # context length",
-        "MAX_SEQ_LEN = 512        # FailureTrace T4 profile: reduced context length",
+        "MAX_SEQ_LEN = 1024       # FailureTrace T4 profile: reduced context length",
     ),
     (
         "EVAL_TOKENS = 40 * 524288  # number of tokens for val eval",
@@ -98,7 +103,7 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     state = "applied" if changed else "already applied"
-    print(f"{repo}: T4 FP32 profile {state} (depth=4, seq=512, device_batch=8).")
+    print(f"{repo}: T4 FP32 profile {state} (depth=8, seq=1024, device_batch=8).")
     return 0
 
 

@@ -27,7 +27,9 @@ ENV_DATA_DIR = "FAILURETRACE_DATA_DIR"
 # Config sections that define reproducible *result identity*. Deliberately EXCLUDES
 # environment-specific paths and feature flags so that moving the data dir or toggling
 # a flag does not change historical result hashes. Grows as later phases add sections.
-_SEMANTIC_SECTIONS = ("metric", "thresholds", "confidence", "retrieval", "estimation")
+_SEMANTIC_SECTIONS = (
+    "metric", "thresholds", "confidence", "retrieval", "estimation", "counterfactual",
+)
 
 
 class Paths(BaseModel):

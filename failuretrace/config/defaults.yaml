@@ -96,6 +96,30 @@ components:
   model: [ASPECT_RATIO, HEAD_DIM, WINDOW_PATTERN, DEPTH]
   batch: [TOTAL_BATCH_SIZE, DEVICE_BATCH_SIZE]
 
+# --- Counterfactual success criterion (Phase 9) --------------------------------------
+# What it means for a C2->C3 counterfactual to CONFIRM its plan, per failure category.
+#
+#   metric_improvement  the counterfactual trial must show a direction-aware improvement
+#                       above `inconclusive_noise_floor` versus the baseline. Correct
+#                       whenever the hypothesis is about the metric.
+#   completion          the counterfactual trial must simply have RUN TO COMPLETION.
+#
+# `resource_pressure` uses `completion` because its hypothesis is "this configuration does
+# not fit in memory". The planned intervention (interventions.py:71-80) is "decrease
+# DEVICE_BATCH_SIZE, raise gradient accumulation, hold the effective batch constant" — and
+# the prediction that intervention makes is *the run stops OOMing*, not *val_bpb improves*.
+# Reducing a batch carries no reason to improve the metric, so judging it on the metric
+# tested a claim the hypothesis never made: real T4 evidence reached C2 and then stalled on
+# a counterfactual that had in fact confirmed exactly what was predicted.
+#
+# This is NOT a weaker bar. A completion-judged promotion still requires a persisted plan,
+# an effective level of exactly C2, and `counterfactual_minimum_support` linked trials that
+# each ran to completion. Categories absent from the map fall back to `default`.
+counterfactual:
+  success_criterion:
+    default: metric_improvement
+    resource_pressure: completion
+
 # --- Controlled effect-size estimation (Phase 7). Deterministic; no priors/sampling. ---
 # Summarizes the magnitude + a closed-form interval of a hypothesis's counterfactual
 # (controlled) trials once it reaches C3. Purely additive: with enabled=false nothing

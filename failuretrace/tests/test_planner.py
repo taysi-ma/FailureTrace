@@ -1,4 +1,4 @@
-"""Planner + replication-gate tests: T10, T11, T7, T14-extended, C4."""
+"""Planner + replication-gate tests: T10, T11, T7, T14-extended, C4, success criteria."""
 
 from __future__ import annotations
 
@@ -17,7 +17,14 @@ from failuretrace import (
     plan_counterfactual,
     promote_replications,
 )
-from failuretrace.core.enums import CausalSupportLevel, LinkType, MetricDirection
+from failuretrace.core.enums import (
+    CausalSupportLevel,
+    FailureCategory,
+    LinkType,
+    MetricDirection,
+    TrialStatus,
+)
+from failuretrace.planner.replication import success_criterion_for
 from failuretrace.planner.interventions import DEFAULT_KNOWN_VARIABLES
 from failuretrace.tests.fixtures.scenarios import (
     inconclusive_noise,
@@ -215,6 +222,109 @@ def test_c4_requires_two_distinct_contexts(repo, settings, make_trial):
     promotion = evaluate_c4(hyp.hypothesis_id, distinct, settings=settings, repository=repo)
     assert promotion is not None
     assert promotion.to_level == CausalSupportLevel.C4_robust_rule
+
+
+# --- per-category counterfactual success criterion --------------------------------
+def _persist_oom_c2(repo, settings, make_trial):
+    """A resource_pressure hypothesis at effective C2 with a persisted plan."""
+    def _oom_trial(trial_id, seed):
+        return make_trial(
+            trial_id=trial_id, seed=seed, status=TrialStatus.failed_oom,
+            changed_components=["model"], hyperparameters={"DEVICE_BATCH_SIZE": 512},
+            baseline_metric=1.0, post_change_metric=None,
+        )
+
+    trial = _oom_trial("oom_src", 42)
+    repo.save_trial(trial)
+    hyp = build_fallback(classify(oom_crash(), settings), oom_crash(),
+                         trial_id=trial.trial_id, settings=settings)
+    assert hyp.category is FailureCategory.resource_pressure
+    repo.save_hypothesis(hyp)
+
+    evidence = []
+    for seed in (43, 44):
+        t = _oom_trial(f"oom_rep{seed}", seed)
+        repo.save_trial(t)
+        evidence.append(ReplicationEvidence(trial_id=t.trial_id, seed=seed))
+    repo.save_promotion(evaluate_replication(
+        hyp.hypothesis_id, evidence, settings=settings, repository=repo,
+        replication_group_id="g_oom",
+    ))
+    repo.save_plan(plan_counterfactual(hyp, settings=settings))
+    return hyp
+
+
+def test_success_criterion_is_per_category(settings):
+    assert success_criterion_for(FailureCategory.resource_pressure, settings) == "completion"
+    assert success_criterion_for(FailureCategory.likely_instability, settings) == "metric_improvement"
+
+
+def test_unknown_success_criterion_falls_back_to_metric_improvement(tmp_path):
+    from failuretrace import load_settings
+    settings = load_settings(
+        overrides={
+            "paths": {"data_dir": str(tmp_path / "d"), "reports_dir": str(tmp_path / "r")},
+            "counterfactual": {"success_criterion": {"default": "vibes"}},
+        },
+        env={},
+    )
+    assert success_criterion_for(FailureCategory.divergence, settings) == "metric_improvement"
+
+
+def test_resource_pressure_c3_confirmed_by_completion_despite_worse_metric(
+    repo, settings, make_trial
+):
+    """The real Kaggle T4 case: the reduced-batch fix ran to completion but scored
+    slightly worse than baseline on seed noise. The hypothesis is 'this configuration
+    does not fit in memory', so completing IS the confirmation."""
+    hyp = _persist_oom_c2(repo, settings, make_trial)
+    worse = CounterfactualResult(
+        trial_id="cf_fix", baseline_metric=1.508717, post_change_metric=1.515176,
+        metric_direction=MetricDirection.minimize, status=TrialStatus.completed,
+    )
+    # The metric regressed, so the default criterion would reject it.
+    assert improvement_is_negative(worse)
+    promotion = evaluate_counterfactual(
+        hyp.hypothesis_id, [worse], settings=settings, repository=repo
+    )
+    assert promotion is not None
+    assert promotion.to_level == CausalSupportLevel.C3_counterfactual_supported
+    assert "completion" in promotion.rationale
+
+
+def test_resource_pressure_c3_refused_when_counterfactual_also_oomed(
+    repo, settings, make_trial
+):
+    hyp = _persist_oom_c2(repo, settings, make_trial)
+    still_oom = CounterfactualResult(
+        trial_id="cf_fix", baseline_metric=1.0, post_change_metric=0.5,  # would "improve"
+        metric_direction=MetricDirection.minimize, status=TrialStatus.failed_oom,
+    )
+    # Even a flattering metric cannot confirm it: the run did not complete.
+    assert evaluate_counterfactual(
+        hyp.hypothesis_id, [still_oom], settings=settings, repository=repo
+    ) is None
+
+
+def test_metric_judged_categories_are_unaffected(repo, settings, make_trial):
+    """A completion status must not smuggle a metric-judged category past the gate."""
+    _, hyp = _persist_c1(repo, settings, make_trial)
+    _promote_c2(repo, settings, make_trial, hyp)
+    repo.save_plan(plan_counterfactual(hyp, settings=settings))
+    regressed = CounterfactualResult(
+        trial_id="cf", baseline_metric=1.0, post_change_metric=1.2,
+        metric_direction=MetricDirection.minimize, status=TrialStatus.completed,
+    )
+    assert evaluate_counterfactual(
+        hyp.hypothesis_id, [regressed], settings=settings, repository=repo
+    ) is None
+
+
+def improvement_is_negative(result: CounterfactualResult) -> bool:
+    from failuretrace.core.settings import improvement
+    return improvement(
+        result.baseline_metric, result.post_change_metric, result.metric_direction
+    ) < 0
 
 
 # --- gate driver (promote_replications) -----------------------------------------

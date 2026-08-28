@@ -7,8 +7,12 @@ a single trial can never reach C2+, and fabricated or mismatched evidence is rej
   reproduced across >= ``replication_minimum_trials`` distinct seeds / equivalent
   controlled trials, all pointing the *same* metric direction and clearing the noise floor.
 - C2 -> C3: a **persisted** counterfactual plan exists for the hypothesis AND
-  >= ``counterfactual_minimum_support`` counterfactual trials produced the expected
-  **directional** result above the noise floor (judged via ``improvement()``).
+  >= ``counterfactual_minimum_support`` counterfactual trials CONFIRMED the plan's
+  prediction. What "confirmed" means is per-category and configured in
+  ``counterfactual.success_criterion``: ``metric_improvement`` (the default) demands a
+  direction-aware ``improvement()`` above the noise floor, while ``completion`` demands
+  only that the trial ran to completion — the correct test for ``resource_pressure``,
+  whose prediction is "the run stops failing", not "the metric improves".
 - C3 -> C4: >= ``c4_minimum_counterfactuals`` directional confirmations from >= 2 distinct
   contexts (different changed components or configs). Rare by design.
 
@@ -28,7 +32,7 @@ from collections import defaultdict
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..classifier.thresholds import load_thresholds
-from ..core.enums import CausalSupportLevel, LinkType, MetricDirection
+from ..core.enums import CausalSupportLevel, FailureCategory, LinkType, MetricDirection, TrialStatus
 from ..core.ids import new_link_id, new_promotion_id, new_replication_group_id
 from ..core.models import LinkRecord, PromotionRecord, TrialRecord
 from ..core.settings import Settings, improvement
@@ -58,6 +62,8 @@ class CounterfactualResult(BaseModel):
     metric_direction: MetricDirection
     changed_components: list[str] = Field(default_factory=list)
     config_hash: str | None = None
+    # Terminal status of the counterfactual trial, needed by the ``completion`` criterion.
+    status: TrialStatus | None = None
 
 
 def _intervention_fingerprint(trial: TrialRecord) -> frozenset[str]:
@@ -212,6 +218,44 @@ def promote_replications(repository: Repository, settings: Settings) -> list[Pro
     return promotions
 
 
+# A counterfactual trial "ran to completion" when it reached a terminal status that
+# implies the run itself finished. ``failed_oom`` / ``failed_runtime`` are excluded: those
+# are exactly the outcomes a resource_pressure intervention predicts will stop happening.
+_COMPLETED_STATUSES = frozenset({
+    TrialStatus.completed, TrialStatus.promoted, TrialStatus.rejected,
+})
+
+_METRIC_IMPROVEMENT = "metric_improvement"
+_COMPLETION = "completion"
+_VALID_CRITERIA = frozenset({_METRIC_IMPROVEMENT, _COMPLETION})
+
+
+def success_criterion_for(category: FailureCategory, settings: Settings) -> str:
+    """The configured C2->C3 confirmation rule for *category*.
+
+    Unknown categories fall back to ``default``; an unrecognised configured value falls
+    back to ``metric_improvement`` with a warning rather than silently promoting.
+    """
+    section = settings.section("counterfactual").get("success_criterion", {}) or {}
+    criterion = section.get(category.value, section.get("default", _METRIC_IMPROVEMENT))
+    if criterion not in _VALID_CRITERIA:
+        logger.warning(
+            "unknown counterfactual success_criterion %r for %s; falling back to %s",
+            criterion, category.value, _METRIC_IMPROVEMENT,
+        )
+        return _METRIC_IMPROVEMENT
+    return criterion
+
+
+def _confirms(result: CounterfactualResult, criterion: str, noise: float) -> bool:
+    """Did this counterfactual trial confirm the plan's prediction?"""
+    if criterion == _COMPLETION:
+        return result.status in _COMPLETED_STATUSES
+    return improvement(
+        result.baseline_metric, result.post_change_metric, result.metric_direction
+    ) > noise
+
+
 def evaluate_counterfactual(
     hypothesis_id: str,
     results: list[CounterfactualResult],
@@ -220,11 +264,12 @@ def evaluate_counterfactual(
     repository: Repository,
 ) -> PromotionRecord | None:
     """C2 -> C3 when a persisted counterfactual plan exists and enough counterfactual
-    trials show the expected directional result above the noise floor."""
+    trials confirmed it under the category's configured success criterion."""
     thresholds = load_thresholds(settings)
     noise = thresholds.inconclusive_noise_floor
 
-    if repository.get_hypothesis(hypothesis_id) is None:
+    hypothesis = repository.get_hypothesis(hypothesis_id)
+    if hypothesis is None:
         logger.warning("counterfactual gate: unknown hypothesis %s", hypothesis_id)
         return None
     if repository.effective_causal_level(hypothesis_id) != _C2:
@@ -235,10 +280,8 @@ def evaluate_counterfactual(
         logger.debug("counterfactual gate: no persisted plan for %s", hypothesis_id)
         return None
 
-    supporting = [
-        r for r in results
-        if improvement(r.baseline_metric, r.post_change_metric, r.metric_direction) > noise
-    ]
+    criterion = success_criterion_for(hypothesis.category, settings)
+    supporting = [r for r in results if _confirms(r, criterion, noise)]
     if len(supporting) < thresholds.counterfactual_minimum_support:
         return None
     return PromotionRecord(
@@ -249,8 +292,9 @@ def evaluate_counterfactual(
         counterfactual_trial_id=supporting[0].trial_id,
         supporting_trial_ids=[r.trial_id for r in supporting],
         rationale=(
-            f"{len(supporting)} counterfactual trial(s) produced the expected directional "
-            f"improvement above the noise floor (>= {thresholds.counterfactual_minimum_support})"
+            f"{len(supporting)} counterfactual trial(s) confirmed the plan under the "
+            f"{criterion!r} criterion "
+            f"(>= {thresholds.counterfactual_minimum_support} required)"
         ),
         settings_hash=settings.settings_hash(),
     )
@@ -295,6 +339,7 @@ def _counterfactual_results(repository: Repository, hypothesis_id: str) -> list[
             metric_direction=trial.metric_direction,
             changed_components=trial.changed_components,
             config_hash=trial.config_hash,
+            status=trial.status,
         ))
     return results
 
@@ -377,21 +422,23 @@ def evaluate_c4(
     settings: Settings,
     repository: Repository,
 ) -> PromotionRecord | None:
-    """C3 -> C4 (rare): enough directional confirmations across >= 2 distinct contexts."""
+    """C3 -> C4 (rare): enough confirmations across >= 2 distinct contexts.
+
+    Uses the same per-category criterion as the C2->C3 gate, so a category judged by
+    ``completion`` is not promoted to C3 and then stranded there by a different rule."""
     thresholds = load_thresholds(settings)
     noise = thresholds.inconclusive_noise_floor
 
-    if repository.get_hypothesis(hypothesis_id) is None:
+    hypothesis = repository.get_hypothesis(hypothesis_id)
+    if hypothesis is None:
         logger.warning("c4 gate: unknown hypothesis %s", hypothesis_id)
         return None
     if repository.effective_causal_level(hypothesis_id) != _C3:
         logger.debug("c4 gate: hypothesis %s is not at C3", hypothesis_id)
         return None
 
-    supporting = [
-        r for r in confirmations
-        if improvement(r.baseline_metric, r.post_change_metric, r.metric_direction) > noise
-    ]
+    criterion = success_criterion_for(hypothesis.category, settings)
+    supporting = [r for r in confirmations if _confirms(r, criterion, noise)]
     contexts = {(tuple(sorted(r.changed_components)), r.config_hash) for r in supporting}
     if len(supporting) < thresholds.c4_minimum_counterfactuals or len(contexts) < 2:
         return None
