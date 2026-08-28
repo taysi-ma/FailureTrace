@@ -50,7 +50,12 @@ _SUMMARY_KEYS = frozenset(
 
 _SUMMARY_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s+([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*$")
 _FAIL_MARKER = re.compile(r"^FAIL\s*$", re.MULTILINE)
-_EXC_LINE = re.compile(r"^([A-Za-z_][\w.]*(?:Error|Exception|Interrupt)):[ \t]?(.*)$", re.MULTILINE)
+# The message is optional: a bare `assert x == y` raises a traceback whose final line is
+# just "AssertionError" with no colon. Requiring one silently dropped those crashes to
+# `unknown`/C0 instead of `runtime_failure` (seen on a real Kaggle T4 run).
+_EXC_LINE = re.compile(
+    r"^([A-Za-z_][\w.]*(?:Error|Exception|Interrupt))(?::[ \t]?(.*))?$", re.MULTILINE
+)
 _OOM_HINT = re.compile(r"out of memory|CUDA out of memory|OutOfMemory", re.IGNORECASE)
 _FLOAT = r"(?:nan|inf|-inf|[-+]?(?:\d+(?:,\d{3})+|\d+|\d*\.\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?)"
 _PROGRESS_LINE = re.compile(

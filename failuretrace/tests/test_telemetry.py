@@ -131,3 +131,29 @@ def test_telemetry_from_run_log_helper():
     tel = telemetry_from_run_log(SUCCESS_LOG)
     assert isinstance(tel, TelemetryRecord)
     assert tel.val_metric == 0.997900
+
+
+def test_bare_exception_line_without_a_message_is_detected():
+    """A plain `assert x == y` ends its traceback with just "AssertionError" — no colon,
+    no message. Requiring a colon dropped such crashes to `unknown`/C0 instead of
+    `runtime_failure` (observed on a real Kaggle T4 run against train.py:513)."""
+    log = (
+        "Estimated FLOPs per token: 2.264955e+08\n"
+        "Traceback (most recent call last):\n"
+        '  File "/kaggle/working/autoresearch/train.py", line 513, in <module>\n'
+        "    assert TOTAL_BATCH_SIZE % tokens_per_fwdbwd == 0\n"
+        "AssertionError\n"
+    )
+    parsed = parse_run_log(log)
+    assert parsed.exception_type == "AssertionError"
+    assert parsed.exception_message is None
+    assert parsed.finished is False
+
+
+def test_exception_message_still_captured_when_present():
+    parsed = parse_run_log(
+        "Traceback (most recent call last):\n"
+        "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1024.00 MiB\n"
+    )
+    assert parsed.exception_type == "torch.OutOfMemoryError"
+    assert parsed.exception_message == "CUDA out of memory. Tried to allocate 1024.00 MiB"

@@ -125,3 +125,46 @@ def test_failed_counterfactual_is_not_persisted_as_completed() -> None:
 def test_t4_trial_profile_uses_distinct_real_seeds() -> None:
     assert [cfg["seed"] for cfg in run_trials.T4_CONFIGS] == [42, 43, 44, 45]
     assert run_trials.T4_CONFIGS[1]["overrides"] == run_trials.T4_CONFIGS[2]["overrides"]
+
+
+def test_every_trial_config_satisfies_the_grad_accum_assertion() -> None:
+    """train.py:513 asserts TOTAL_BATCH_SIZE % (DEVICE_BATCH_SIZE * MAX_SEQ_LEN) == 0.
+
+    A config that violates it dies on an AssertionError before it can OOM, producing a
+    `runtime_failure` where the design needs `resource_pressure`. Both built-in config
+    sets shipped broken until a real Kaggle T4 run surfaced it; this test catches the
+    next one without spending a GPU-hour.
+    """
+    import re
+
+    def _patched_int(replacements, name: str) -> int:
+        """The value patch_t4 writes for `name`, e.g. MAX_SEQ_LEN -> 1024."""
+        for _old, new in replacements:
+            match = re.match(rf"{name} = (\S+)", new)
+            if match:
+                return int(eval(match.group(1)))  # noqa: S307 - literals from our own file
+        raise AssertionError(f"{name} not set by the T4 profile")
+
+    # T4 profile values come from the patch itself, so this test follows any retune.
+    t4 = {
+        "MAX_SEQ_LEN": _patched_int(patch_t4._PREPARE_REPLACEMENTS, "MAX_SEQ_LEN"),
+        "DEVICE_BATCH_SIZE": _patched_int(patch_t4._TRAIN_REPLACEMENTS, "DEVICE_BATCH_SIZE"),
+        "TOTAL_BATCH_SIZE": _patched_int(patch_t4._TRAIN_REPLACEMENTS, "TOTAL_BATCH_SIZE"),
+    }
+    # A100 runs unpatched upstream values (train.py:449,451 / prepare.py:30 at 228791f).
+    a100 = {"MAX_SEQ_LEN": 2048, "DEVICE_BATCH_SIZE": 128, "TOTAL_BATCH_SIZE": 2**19}
+
+    for profile, defaults, configs in (
+        ("a100", a100, run_trials.CONFIGS),
+        ("t4", t4, run_trials.T4_CONFIGS),
+    ):
+        for cfg in configs:
+            overrides = cfg["overrides"]
+            device_batch = overrides.get("DEVICE_BATCH_SIZE", defaults["DEVICE_BATCH_SIZE"])
+            total_batch = overrides.get("TOTAL_BATCH_SIZE", defaults["TOTAL_BATCH_SIZE"])
+            tokens_per_fwdbwd = device_batch * defaults["MAX_SEQ_LEN"]
+            assert total_batch % tokens_per_fwdbwd == 0, (
+                f"{profile}/{cfg['label']}: TOTAL_BATCH_SIZE={total_batch} is not a multiple "
+                f"of DEVICE_BATCH_SIZE*MAX_SEQ_LEN={tokens_per_fwdbwd}; train.py:513 would "
+                f"raise AssertionError instead of running"
+            )

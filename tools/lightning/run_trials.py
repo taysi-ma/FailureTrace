@@ -52,10 +52,16 @@ from failuretrace.telemetry import parse_run_log
 CONFIGS = [
     {"label": "baseline", "role": "baseline", "seed": 42,
      "components": ["model"], "overrides": {}},
+    # TOTAL_BATCH_SIZE must stay a multiple of DEVICE_BATCH_SIZE * MAX_SEQ_LEN or train.py
+    # aborts on `assert TOTAL_BATCH_SIZE % tokens_per_fwdbwd == 0` (train.py:513) BEFORE it
+    # can OOM -- an AssertionError, not the resource_pressure evidence these configs exist
+    # to produce. At seq 2048, device batch 512 needs >= 512 * 2048 = 2**20.
     {"label": "oom-a", "role": "failure", "seed": 43,
-     "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 512}},
+     "components": ["model"],
+     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**20}},
     {"label": "oom-b", "role": "failure", "seed": 44,
-     "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 512}},
+     "components": ["model"],
+     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**20}},
     {"label": "fix", "role": "counterfactual", "seed": 45,
      "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 32}},
 ]
@@ -74,10 +80,10 @@ T4_CONFIGS = [
      "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 4}},
     {"label": "oom-a", "role": "failure", "seed": 43,
      "components": ["model"],
-     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**18}},
+     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**19}},
     {"label": "oom-b", "role": "failure", "seed": 44,
      "components": ["model"],
-     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**18}},
+     "overrides": {"DEVICE_BATCH_SIZE": 512, "TOTAL_BATCH_SIZE": 2**19}},
     {"label": "fix", "role": "counterfactual", "seed": 45,
      "components": ["model"], "overrides": {"DEVICE_BATCH_SIZE": 8}},
 ]
