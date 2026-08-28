@@ -9,6 +9,7 @@ them into FailureTrace end-to-end.
 | `patch_train.py` | Swaps the one FA3 call for PyTorch `scaled_dot_product_attention`; precision is unchanged. |
 | `patch_t4.py` | Applies the Colab/T4 FP16 profile: depth 4, sequence 512, device batch 8, full causal attention, and a bounded validation set. |
 | `run_trials.py` | Runs `train.py` with A100 or T4 configs, captures each real `run.log`, ingests into FailureTrace, walks the ladder, and prints levels + effect size. |
+| `free_gpu_trials.ipynb` | One-click notebook for **Kaggle / Colab / Lightning**: detects the GPU, picks the profile, applies the right patches, sizes the batch to the card, prepares data, and runs the trials. Start here if you have no GPU of your own. |
 
 ## Which GPU
 - **Lightning free tier**: 15 credits/month (**monthly**, not daily; ~80 T4-hrs, ~3 A100-hrs).

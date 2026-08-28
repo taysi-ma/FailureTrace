@@ -37,7 +37,12 @@ _TRAIN_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("self.transformer.wte.to(dtype=torch.bfloat16)", "self.transformer.wte.to(dtype=torch.float16)"),
     ("ve.to(dtype=torch.bfloat16)", "ve.to(dtype=torch.float16)"),
     ("cos, sin = cos.bfloat16(), sin.bfloat16()", "cos, sin = cos.half(), sin.half()"),
-    ("X = g.bfloat16()", "X = g.half()"),
+    # NOT g.half(): this line feeds the Polar Express (Newton-Schulz) iteration, which
+    # computes A = X.mT @ X and then A @ A with a leading coefficient of 3.89. bf16 tops
+    # out near 3.4e38 and survives that; fp16 tops out at 65504, overflows to inf, and
+    # yields NaN parameters within ~3 optimizer steps (train.py:570 prints FAIL, exit 1).
+    # Turing has no bf16, so fp32 is the only safe dtype here. The matrices are small.
+    ("X = g.bfloat16()", "X = g.float()"),
     (
         'autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)',
         'autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.float16)',
